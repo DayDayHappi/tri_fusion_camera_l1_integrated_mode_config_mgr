@@ -1,0 +1,32 @@
+# build output
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+Makefile
+cmake_install.cmake
+compile_commands.json
+
+# binaries
+*.o
+*.a
+*.so
+*.so.*
+*.out
+*.elf
+*.bin
+*.exe
+
+# logs
+log/
+logs/
+*.log
+
+# editor
+.vscode/
+.idea/
+*.swp
+
+# system
+.DS_Store
+Thumbs.db

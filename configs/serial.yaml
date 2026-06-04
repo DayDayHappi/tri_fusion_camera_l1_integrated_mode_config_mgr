@@ -1,0 +1,15 @@
+serial:
+  composite_sensor:
+    enable: true
+    dev: "/dev/tri_composite_serial"
+    baudrate: 115200
+    databits: 8
+    stopbits: 1
+    parity: "none"
+    timeout_ms: 500
+    retry_count: 3
+    commands:
+      set_lowlight_only: ""
+      set_thermal_only: ""
+      set_lowlight_thermal_composite: ""
+      query_mode: ""

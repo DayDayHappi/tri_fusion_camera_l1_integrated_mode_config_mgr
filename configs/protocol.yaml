@@ -1,0 +1,8 @@
+protocol:
+  active: "private"
+  allow_multi_online: false
+  priority:
+    - gb28181
+    - onvif
+    - private
+  reserve_multi_online_architecture: true

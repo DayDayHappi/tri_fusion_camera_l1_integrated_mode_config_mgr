@@ -1,0 +1,3 @@
+#include "protocol/gb28181/GbInviteHandler.h"
+#include "foundation/error/ErrorCode.h"
+namespace tri::protocol::gb28181 { tri::foundation::Result<void> GbInviteHandler::init(GbRtpSender* sender) { if (sender == nullptr) return tri::foundation::Result<void>::error(tri::foundation::ErrorCode::InvalidArgument, "GB RTP sender is null"); sender_ = sender; return tri::foundation::Result<void>::success(); } tri::foundation::Result<void> GbInviteHandler::handleInvite(GbInviteContext context) { if (sender_ == nullptr) return tri::foundation::Result<void>::error(tri::foundation::ErrorCode::NotInitialized, "GB invite handler is not initialized"); return sender_->start(std::move(context)); } void GbInviteHandler::bye() { if (sender_) sender_->stop(); } }

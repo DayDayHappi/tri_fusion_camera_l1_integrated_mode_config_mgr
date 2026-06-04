@@ -1,0 +1,514 @@
+cmake_minimum_required(VERSION 3.16)
+project(tri_fusion_camera_l1_integrated LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+option(TRI_FUSION_BUILD_TOOLS "Build L1 hardware probe tools" ON)
+option(TRI_FUSION_BUILD_TESTS "Build smoke tests" ON)
+
+find_package(OpenSSL QUIET)
+if(OpenSSL_FOUND)
+    message(STATUS "OpenSSL found: ${OPENSSL_VERSION}")
+else()
+    message(WARNING "OpenSSL not found in cross sysroot; GB28181/RTSP OpenSSL-dependent targets will be skipped.")
+endif()
+
+# ============================================================
+# L0 System Foundation Layer
+# ============================================================
+file(GLOB_RECURSE FOUNDATION_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/foundation/*.cpp
+)
+
+add_library(tri_fusion_foundation STATIC ${FOUNDATION_SOURCES})
+target_include_directories(tri_fusion_foundation
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_options(tri_fusion_foundation
+    PRIVATE
+        -Wall -Wextra -Wpedantic
+)
+target_link_libraries(tri_fusion_foundation
+    PUBLIC
+        pthread
+)
+
+# ============================================================
+# L1 Hardware Access Layer
+# ============================================================
+file(GLOB_RECURSE HARDWARE_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/hardware/*.cpp
+)
+
+add_library(tri_fusion_hardware STATIC ${HARDWARE_SOURCES})
+target_include_directories(tri_fusion_hardware PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_SYSROOT}/usr/include
+    ${CMAKE_SYSROOT}/usr/include/rga
+    ${CMAKE_SYSROOT}/usr/include/rockchip
+)
+target_compile_options(tri_fusion_hardware
+    PRIVATE
+        -Wall -Wextra -Wpedantic
+)
+target_link_libraries(tri_fusion_hardware PUBLIC
+    pthread
+    rga
+    rockchip_mpp
+)
+
+# ============================================================
+# L2 Device Abstraction Layer
+# ============================================================
+file(GLOB_RECURSE DEVICE_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/device/*.cpp
+)
+
+add_library(tri_fusion_device STATIC ${DEVICE_SOURCES})
+target_include_directories(tri_fusion_device
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_options(tri_fusion_device
+    PRIVATE
+        -Wall -Wextra -Wpedantic
+)
+target_link_libraries(tri_fusion_device
+    PUBLIC
+        tri_fusion_hardware
+        tri_fusion_foundation
+        pthread
+)
+
+# ============================================================
+# L3 Device Control Layer
+# ============================================================
+file(GLOB_RECURSE DEVICE_CONTROL_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/device_control/*.cpp
+)
+
+add_library(tri_fusion_device_control STATIC ${DEVICE_CONTROL_SOURCES})
+target_include_directories(tri_fusion_device_control
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_options(tri_fusion_device_control
+    PRIVATE
+        -Wall -Wextra -Wpedantic
+)
+target_link_libraries(tri_fusion_device_control
+    PUBLIC
+        tri_fusion_hardware
+        tri_fusion_foundation
+        pthread
+)
+
+# ============================================================
+# L4 Media Pipeline Layer
+# ============================================================
+file(GLOB_RECURSE MEDIA_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/media/*.cpp
+)
+
+add_library(tri_fusion_media STATIC ${MEDIA_SOURCES})
+target_include_directories(tri_fusion_media
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_options(tri_fusion_media
+    PRIVATE
+        -Wall -Wextra -Wpedantic
+)
+target_link_libraries(tri_fusion_media
+    PUBLIC
+        tri_fusion_device
+        tri_fusion_device_control
+        tri_fusion_hardware
+        tri_fusion_foundation
+        pthread
+)
+
+# ============================================================
+# L5 Algorithm Layer
+# ============================================================
+file(GLOB_RECURSE ALGORITHM_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/algorithm/*.cpp
+)
+
+add_library(tri_fusion_algorithm STATIC ${ALGORITHM_SOURCES})
+target_include_directories(tri_fusion_algorithm
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_options(tri_fusion_algorithm
+    PRIVATE
+        -Wall -Wextra -Wpedantic
+)
+target_link_libraries(tri_fusion_algorithm
+    PUBLIC
+        tri_fusion_media
+        tri_fusion_foundation
+        pthread
+)
+
+# ============================================================
+# L6 Mode Orchestration Layer
+# ============================================================
+file(GLOB_RECURSE MODE_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/mode/*.cpp
+)
+
+add_library(tri_fusion_mode STATIC ${MODE_SOURCES})
+target_include_directories(tri_fusion_mode
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_options(tri_fusion_mode
+    PRIVATE
+        -Wall -Wextra -Wpedantic
+)
+target_link_libraries(tri_fusion_mode
+    PUBLIC
+        tri_fusion_algorithm
+        tri_fusion_media
+        tri_fusion_device_control
+        tri_fusion_device
+        tri_fusion_hardware
+        tri_fusion_foundation
+        pthread
+)
+
+# ============================================================
+# L7 Service & Command Layer
+# ============================================================
+file(GLOB_RECURSE COMMAND_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/command/*.cpp
+)
+
+file(GLOB_RECURSE SERVICE_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/service/*.cpp
+)
+
+add_library(tri_fusion_service_command STATIC
+    ${COMMAND_SOURCES}
+    ${SERVICE_SOURCES}
+)
+target_include_directories(tri_fusion_service_command
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_options(tri_fusion_service_command
+    PRIVATE
+        -Wall -Wextra -Wpedantic
+)
+target_link_libraries(tri_fusion_service_command
+    PUBLIC
+        tri_fusion_mode
+        tri_fusion_algorithm
+        tri_fusion_media
+        tri_fusion_device_control
+        tri_fusion_device
+        tri_fusion_hardware
+        tri_fusion_foundation
+        pthread
+)
+
+# ============================================================
+# L8 Protocol Access Layer
+# ============================================================
+file(GLOB_RECURSE PROTOCOL_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/protocol/*.cpp
+)
+
+add_library(tri_fusion_protocol STATIC ${PROTOCOL_SOURCES})
+target_include_directories(tri_fusion_protocol
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_options(tri_fusion_protocol
+    PRIVATE
+        -Wall -Wextra -Wpedantic
+)
+target_link_libraries(tri_fusion_protocol
+    PUBLIC
+        tri_fusion_service_command
+        tri_fusion_mode
+        tri_fusion_algorithm
+        tri_fusion_media
+        tri_fusion_device_control
+        tri_fusion_device
+        tri_fusion_hardware
+        tri_fusion_foundation
+        pthread
+)
+
+# ============================================================
+# L1 Tools
+# ============================================================
+if(TRI_FUSION_BUILD_TOOLS)
+    add_executable(l1_probe tools/l1_probe.cpp)
+    target_link_libraries(l1_probe
+        PRIVATE
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+
+    add_executable(l1_serial_probe tools/l1_serial_probe.cpp)
+    target_link_libraries(l1_serial_probe
+        PRIVATE
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+endif()
+
+# ============================================================
+# Tests
+# ============================================================
+if(TRI_FUSION_BUILD_TESTS)
+    add_executable(l1_smoke_test tests/l1_smoke_test.cpp)
+    target_link_libraries(l1_smoke_test
+        PRIVATE
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+
+    add_executable(l2_device_smoke_test tests/l2_device_smoke_test.cpp)
+    target_link_libraries(l2_device_smoke_test
+        PRIVATE
+            tri_fusion_device
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+
+    add_executable(l2_visible_capture_probe tests/l2_visible_capture_probe.cpp)
+    target_link_libraries(l2_visible_capture_probe
+        PRIVATE
+            tri_fusion_device
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+
+    add_executable(l3_device_control_smoke_test tests/l3_device_control_smoke_test.cpp)
+    target_link_libraries(l3_device_control_smoke_test
+        PRIVATE
+            tri_fusion_device_control
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+
+    add_executable(l3_composite_control_probe tests/l3_composite_control_probe.cpp)
+    target_link_libraries(l3_composite_control_probe
+        PRIVATE
+            tri_fusion_device_control
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+
+    add_executable(l4_media_smoke_test tests/l4_media_smoke_test.cpp)
+    target_link_libraries(l4_media_smoke_test
+        PRIVATE
+            tri_fusion_media
+            tri_fusion_device
+            tri_fusion_device_control
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+
+    add_executable(l5_algorithm_smoke_test tests/l5_algorithm_smoke_test.cpp)
+    target_link_libraries(l5_algorithm_smoke_test
+        PRIVATE
+            tri_fusion_algorithm
+            tri_fusion_media
+            tri_fusion_foundation
+    )
+
+    add_executable(l6_mode_smoke_test tests/l6_mode_smoke_test.cpp)
+    target_link_libraries(l6_mode_smoke_test
+        PRIVATE
+            tri_fusion_mode
+            tri_fusion_algorithm
+            tri_fusion_media
+            tri_fusion_device_control
+            tri_fusion_device
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+
+    add_executable(l6_mode_integration_probe tests/l6_mode_integration_probe.cpp)
+    target_link_libraries(l6_mode_integration_probe
+        PRIVATE
+            tri_fusion_mode
+            tri_fusion_algorithm
+            tri_fusion_media
+            tri_fusion_device_control
+            tri_fusion_device
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+
+    add_executable(l7_command_smoke_test tests/l7_command_smoke_test.cpp)
+    target_link_libraries(l7_command_smoke_test
+        PRIVATE
+            tri_fusion_service_command
+            tri_fusion_mode
+            tri_fusion_algorithm
+            tri_fusion_media
+            tri_fusion_device_control
+            tri_fusion_device
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+
+    add_executable(l7_manual_integration_probe tests/l7_manual_integration_probe.cpp)
+    target_link_libraries(l7_manual_integration_probe
+        PRIVATE
+            tri_fusion_service_command
+            tri_fusion_mode
+            tri_fusion_algorithm
+            tri_fusion_media
+            tri_fusion_device_control
+            tri_fusion_device
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+
+    add_executable(l8_protocol_smoke_test tests/l8_protocol_smoke_test.cpp)
+    target_link_libraries(l8_protocol_smoke_test
+        PRIVATE
+            tri_fusion_protocol
+            tri_fusion_service_command
+            tri_fusion_mode
+            tri_fusion_algorithm
+            tri_fusion_media
+            tri_fusion_device_control
+            tri_fusion_device
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+
+    add_executable(l8_manual_integration_probe tests/l8_manual_integration_probe.cpp)
+    target_link_libraries(l8_manual_integration_probe
+        PRIVATE
+            tri_fusion_protocol
+            tri_fusion_service_command
+            tri_fusion_mode
+            tri_fusion_algorithm
+            tri_fusion_media
+            tri_fusion_device_control
+            tri_fusion_device
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+
+    add_executable(l8_protocol_config_smoke_test tests/l8_protocol_config_smoke_test.cpp)
+    target_link_libraries(l8_protocol_config_smoke_test
+        PRIVATE
+            tri_fusion_protocol
+            tri_fusion_service_command
+            tri_fusion_mode
+            tri_fusion_algorithm
+            tri_fusion_media
+            tri_fusion_device_control
+            tri_fusion_device
+            tri_fusion_hardware
+            tri_fusion_foundation
+    )
+# [disabled for UDP/RGA/MPP cross build: OpenSSL not required]
+#
+#
+#     add_executable(l8_gb28181_register_probe tests/l8_gb28181_register_probe.cpp)
+#     target_link_libraries(l8_gb28181_register_probe
+#         PRIVATE
+#             tri_fusion_protocol
+#             tri_fusion_service_command
+#             tri_fusion_mode
+#             tri_fusion_algorithm
+#             tri_fusion_media
+#             tri_fusion_device_control
+#             tri_fusion_device
+#             tri_fusion_hardware
+#             tri_fusion_foundation
+#     )
+#
+#
+# [disabled for UDP/RGA/MPP cross build: OpenSSL not required]
+#
+# add_executable(l8_gb28181_play_probe tests/l8_gb28181_play_probe.cpp)
+#     target_link_libraries(l8_gb28181_play_probe
+#         PRIVATE
+#             tri_fusion_protocol
+#             tri_fusion_service_command
+#             tri_fusion_mode
+#             tri_fusion_algorithm
+#             tri_fusion_media
+#             tri_fusion_device_control
+#             tri_fusion_device
+#             tri_fusion_hardware
+#             tri_fusion_foundation
+#     )
+#
+#
+# [disabled for UDP/RGA/MPP cross build: OpenSSL not required]
+#
+# add_executable(tri_fusion_rtsp_main src/main.cpp)
+#     target_link_libraries(tri_fusion_rtsp_main
+#         PRIVATE
+#             tri_fusion_protocol
+#             tri_fusion_service_command
+#             tri_fusion_mode
+#             tri_fusion_algorithm
+#             tri_fusion_media
+#             tri_fusion_device_control
+#             tri_fusion_device
+#             tri_fusion_hardware
+#             tri_fusion_foundation
+#     )
+#
+add_executable(l8_udp_yuyv_mainstream_probe
+    tests/l8_udp_yuyv_mainstream_probe.cpp
+    src/protocol/udp/UdpMpegTsPublisher.cpp
+)
+
+target_link_libraries(l8_udp_yuyv_mainstream_probe
+    PRIVATE
+        tri_fusion_service_command
+        tri_fusion_mode
+        tri_fusion_algorithm
+        tri_fusion_media
+        tri_fusion_device_control
+        tri_fusion_device
+        tri_fusion_hardware
+        tri_fusion_foundation
+        pthread
+)
+
+    add_executable(l4_gstreamer_udp_probe
+        tests/l4_gstreamer_udp_probe.cpp
+    )
+
+    target_link_libraries(l4_gstreamer_udp_probe
+        PRIVATE
+            tri_fusion_media
+            tri_fusion_foundation
+            pthread
+    )
+
+
+    add_executable(l8_private_gstreamer_control_probe
+        tests/l8_private_gstreamer_control_probe.cpp
+    )
+
+    target_link_libraries(l8_private_gstreamer_control_probe
+        PRIVATE
+            tri_fusion_protocol
+            tri_fusion_media
+            tri_fusion_device_control
+            tri_fusion_hardware
+            tri_fusion_foundation
+            pthread
+    )
+
+endif()
