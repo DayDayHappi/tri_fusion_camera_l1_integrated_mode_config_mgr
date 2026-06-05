@@ -35,7 +35,7 @@ curl.exe -X POST http://<板子IP>:18080/api/v1/mode/visible_composite
 可见光模式会使用 `/dev/video3` 的 MJPG pipeline：
 
 ```text
-v4l2src device=/dev/video3 ! image/jpeg,width=1920,height=1080,framerate=30/1 ! mppjpegdec ! mpph264enc ! h264parse ! mpegtsmux ! udpsink host=192.168.1.153 port=5004
+v4l2src device=/dev/video3 ! image/jpeg,width=1920,height=1080,framerate=30/1 ! jpegdec ! videoconvert ! mpph264enc ! h264parse ! mpegtsmux ! udpsink host=192.168.1.153 port=5004
 ```
 
 微光/热红外/复合模式会使用 `/dev/video1` 的 YUY2 pipeline，并在启动视频前通过串口切换复合相机输出模式。

@@ -4,7 +4,7 @@
 #include "foundation/utils/StringUtils.h"
 
 #include <algorithm>
-#include <iostream>
+
 namespace tri::media::gstreamer {
 
 namespace {
@@ -27,7 +27,6 @@ foundation::Result<void> GStreamerPipelineConfigManager::load(
     if (loadRet) {
         camera_ = cfgMgr.camera();
         lastMessage_ = "loaded camera/media configuration from " + options_.configDir;
-        std::cerr << "[VIDEO][CONFIG] loaded config_dir=" << options_.configDir << "\n";
     } else {
         // Keep the program usable for board-side smoke tests even if configs were not copied.
         camera_.visible.enable = true;
@@ -66,28 +65,12 @@ foundation::Result<void> GStreamerPipelineConfigManager::load(
     modeSourceMap_["visible_composite"] = "composite";
 
     loadModeSourceMapFromCameraYaml(options_.configDir + "/camera.yaml");
-    std::cerr << "[VIDEO][CONFIG] visible device=" << camera_.visible.videoNode
-          << " format=" << camera_.visible.format
-          << " size=" << camera_.visible.width << "x" << camera_.visible.height
-          << " fps=" << camera_.visible.fps << "\n";
-
-std::cerr << "[VIDEO][CONFIG] composite device=" << camera_.compositeLowThermal.videoNode
-          << " format=" << camera_.compositeLowThermal.format
-          << " size=" << camera_.compositeLowThermal.width << "x" << camera_.compositeLowThermal.height
-          << " fps=" << camera_.compositeLowThermal.fps << "\n";
-
-for (const auto& kv : modeSourceMap_) {
-    std::cerr << "[VIDEO][CONFIG] mode_source " << kv.first
-              << " -> " << kv.second << "\n";
-}
     return foundation::Result<void>::success();
 }
 
 GStreamerPipelineConfig GStreamerPipelineConfigManager::configForModeCommand(
     const std::string& commandName) const {
     const std::string source = sourceNameForModeCommand(commandName);
-    std::cerr << "[VIDEO][CONFIG] select source for mode=" << commandName
-              << " source=" << source << "\n";
     if (source == "visible") {
         return buildFromEndpoint("visible", camera_.visible);
     }
@@ -120,16 +103,6 @@ GStreamerPipelineConfig GStreamerPipelineConfigManager::buildFromEndpoint(
     cfg.rawFormat = normalizeRawFormat(endpoint.format);
     cfg.udpHost = options_.udpHost;
     cfg.udpPort = options_.udpPort;
-    std::cerr << "[VIDEO][CONFIG] build endpoint config:"
-          << " source=" << cfg.sourceName
-          << " device=" << cfg.device
-          << " input_codec=" << cfg.inputCodec
-          << " raw_format=" << cfg.rawFormat
-          << " size=" << cfg.width << "x" << cfg.height
-          << " fps=" << cfg.fps
-          << " encoder=" << cfg.encoder
-          << " udp=" << cfg.udpHost << ":" << cfg.udpPort
-          << "\n";
     return cfg;
 }
 

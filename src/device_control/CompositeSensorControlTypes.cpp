@@ -25,38 +25,6 @@ std::string toString(CompositeSensorOutputMode mode) {
     return "UNKNOWN";
 }
 
-std::string toString(FusionColor color) {
-    switch (color) {
-        case FusionColor::BlackWhite: return "BLACK_WHITE";
-        case FusionColor::Forest: return "FOREST";
-        case FusionColor::Snow: return "SNOW";
-        case FusionColor::Ocean: return "OCEAN";
-        case FusionColor::City: return "CITY";
-        case FusionColor::Desert: return "DESERT";
-        case FusionColor::Default: return "DEFAULT";
-    }
-    return "UNKNOWN";
-}
-
-std::string toString(ContourMode mode) {
-    switch (mode) {
-        case ContourMode::Off: return "OFF";
-        case ContourMode::Red: return "RED";
-        case ContourMode::Green: return "GREEN";
-        case ContourMode::Blue: return "BLUE";
-        case ContourMode::Purple: return "PURPLE";
-    }
-    return "UNKNOWN";
-}
-
-std::string toString(InfraredPolarity polarity) {
-    switch (polarity) {
-        case InfraredPolarity::WhiteHot: return "WHITE_HOT";
-        case InfraredPolarity::BlackHot: return "BLACK_HOT";
-    }
-    return "UNKNOWN";
-}
-
 CompositeSensorOutputMode compositeSensorOutputModeFromString(const std::string& text) {
     const auto s = normalize(text);
     if (s == "LOWLIGHTONLY" || s == "LOWLIGHT" || s == "MICROLIGHTONLY" || s == "MICROLIGHT") {

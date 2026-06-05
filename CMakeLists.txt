@@ -416,6 +416,7 @@ if(TRI_FUSION_BUILD_TESTS)
             tri_fusion_hardware
             tri_fusion_foundation
     )
+
 # [disabled for UDP/RGA/MPP cross build: OpenSSL not required]
 #
 #
@@ -467,23 +468,24 @@ if(TRI_FUSION_BUILD_TESTS)
 #             tri_fusion_foundation
 #     )
 #
-add_executable(l8_udp_yuyv_mainstream_probe
-    tests/l8_udp_yuyv_mainstream_probe.cpp
-    src/protocol/udp/UdpMpegTsPublisher.cpp
-)
 
-target_link_libraries(l8_udp_yuyv_mainstream_probe
-    PRIVATE
-        tri_fusion_service_command
-        tri_fusion_mode
-        tri_fusion_algorithm
-        tri_fusion_media
-        tri_fusion_device_control
-        tri_fusion_device
-        tri_fusion_hardware
-        tri_fusion_foundation
-        pthread
-)
+    add_executable(l8_udp_yuyv_mainstream_probe
+        tests/l8_udp_yuyv_mainstream_probe.cpp
+        src/protocol/udp/UdpMpegTsPublisher.cpp
+    )
+
+    target_link_libraries(l8_udp_yuyv_mainstream_probe
+        PRIVATE
+            tri_fusion_service_command
+            tri_fusion_mode
+            tri_fusion_algorithm
+            tri_fusion_media
+            tri_fusion_device_control
+            tri_fusion_device
+            tri_fusion_hardware
+            tri_fusion_foundation
+            pthread
+    )
 
     add_executable(l4_gstreamer_udp_probe
         tests/l4_gstreamer_udp_probe.cpp
@@ -496,7 +498,6 @@ target_link_libraries(l8_udp_yuyv_mainstream_probe
             pthread
     )
 
-
     add_executable(l8_private_gstreamer_control_probe
         tests/l8_private_gstreamer_control_probe.cpp
     )
@@ -508,6 +509,92 @@ target_link_libraries(l8_udp_yuyv_mainstream_probe
             tri_fusion_device_control
             tri_fusion_hardware
             tri_fusion_foundation
+            pthread
+    )
+
+    # ============================================================
+    # L8 GStreamer appsrc/appsink fusion probe
+    # ============================================================
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(GSTREAMER QUIET
+            gstreamer-1.0
+            gstreamer-app-1.0
+            gstreamer-video-1.0
+        )
+    endif()
+
+    # Buildroot cross sysroot.
+    # If CMAKE_SYSROOT is not exported by the toolchain file, keep a direct fallback
+    # to the RK3588 Buildroot sysroot where gst/gst.h was confirmed to exist.
+    set(TRI_FUSION_BUILDROOT_SYSROOT
+        "/home/alientek/tronlong/RK3588/rk3588_linux_release/buildroot/output/rockchip_rk3588/host/aarch64-buildroot-linux-gnu/sysroot"
+        CACHE PATH "RK3588 Buildroot target sysroot"
+    )
+
+    set(TRI_FUSION_GSTREAMER_INCLUDE_DIRS
+        ${GSTREAMER_INCLUDE_DIRS}
+        ${CMAKE_SYSROOT}/usr/include
+        ${CMAKE_SYSROOT}/usr/include/gstreamer-1.0
+        ${CMAKE_SYSROOT}/usr/include/glib-2.0
+        ${CMAKE_SYSROOT}/usr/lib/glib-2.0/include
+        ${CMAKE_SYSROOT}/usr/lib/aarch64-linux-gnu/glib-2.0/include
+        ${TRI_FUSION_BUILDROOT_SYSROOT}/usr/include
+        ${TRI_FUSION_BUILDROOT_SYSROOT}/usr/include/gstreamer-1.0
+        ${TRI_FUSION_BUILDROOT_SYSROOT}/usr/include/glib-2.0
+        ${TRI_FUSION_BUILDROOT_SYSROOT}/usr/lib/glib-2.0/include
+        ${TRI_FUSION_BUILDROOT_SYSROOT}/usr/lib/aarch64-linux-gnu/glib-2.0/include
+    )
+
+    set(TRI_FUSION_GSTREAMER_LIBRARY_DIRS
+        ${GSTREAMER_LIBRARY_DIRS}
+        ${CMAKE_SYSROOT}/usr/lib
+        ${CMAKE_SYSROOT}/usr/lib/aarch64-linux-gnu
+        ${TRI_FUSION_BUILDROOT_SYSROOT}/usr/lib
+        ${TRI_FUSION_BUILDROOT_SYSROOT}/usr/lib/aarch64-linux-gnu
+    )
+
+    set(TRI_FUSION_GSTREAMER_LIBRARIES ${GSTREAMER_LIBRARIES})
+    if(NOT TRI_FUSION_GSTREAMER_LIBRARIES)
+        set(TRI_FUSION_GSTREAMER_LIBRARIES
+            gstreamer-1.0
+            gstapp-1.0
+            gstvideo-1.0
+            gobject-2.0
+            glib-2.0
+        )
+    endif()
+
+    add_executable(l8_gstreamer_app_fusion_probe
+        tests/l8_gstreamer_app_fusion_probe.cpp
+    )
+
+    target_include_directories(l8_gstreamer_app_fusion_probe
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${TRI_FUSION_GSTREAMER_INCLUDE_DIRS}
+    )
+
+    target_link_directories(l8_gstreamer_app_fusion_probe
+        PRIVATE
+            ${TRI_FUSION_GSTREAMER_LIBRARY_DIRS}
+    )
+
+    target_compile_options(l8_gstreamer_app_fusion_probe
+        PRIVATE
+            -Wall -Wextra -Wpedantic
+            ${GSTREAMER_CFLAGS_OTHER}
+    )
+
+    target_link_options(l8_gstreamer_app_fusion_probe
+        PRIVATE
+            "-Wl,--sysroot=${TRI_FUSION_BUILDROOT_SYSROOT}"
+    )
+
+    target_link_libraries(l8_gstreamer_app_fusion_probe
+        PRIVATE
+            ${TRI_FUSION_GSTREAMER_LIBRARIES}
+            m
             pthread
     )
 

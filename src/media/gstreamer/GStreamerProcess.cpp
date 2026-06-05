@@ -7,7 +7,7 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
-#include <iostream>
+
 namespace tri::media::gstreamer {
 
 GStreamerProcess::~GStreamerProcess() {
@@ -17,8 +17,6 @@ GStreamerProcess::~GStreamerProcess() {
 }
 
 bool GStreamerProcess::start(const std::vector<std::string>& argsIn) {
-    std::cerr << "[VIDEO][PROCESS] start request received, argc="
-              << argsIn.size() << "\n";
     if (argsIn.empty()) {
         lastError_ = "empty gstreamer argument list";
         return false;
@@ -31,7 +29,7 @@ bool GStreamerProcess::start(const std::vector<std::string>& argsIn) {
 
     std::vector<std::string> args = argsIn;
     auto argv = makeArgv(args);
-    std::cerr << "[VIDEO][PROCESS] fork gst-launch process\n";
+
     const pid_t child = ::fork();
     if (child < 0) {
         lastError_ = std::string("fork failed: ") + std::strerror(errno);
@@ -47,23 +45,18 @@ bool GStreamerProcess::start(const std::vector<std::string>& argsIn) {
     pid_ = child;
     exitCode_ = -1;
     lastError_.clear();
-    std::cerr << "[VIDEO][PROCESS] gst-launch forked, pid="
-          << pid_ << "\n";
+
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     if (!isRunning()) {
         lastError_ = "gst-launch exited immediately";
-        std::cerr << "[VIDEO][PROCESS] gst-launch exited immediately, exit_code="
-              << exitCode_ << "\n";
         return false;
     }
-std::cerr << "[VIDEO][PROCESS] gst-launch is running, pid="
-          << pid_ << "\n";
+
     return true;
 }
 
 bool GStreamerProcess::stop(std::int32_t timeoutMs) {
     if (pid_ <= 0) {
-        std::cerr << "[VIDEO][PROCESS] stop skipped, no running gst-launch pid\n";
         return true;
     }
 
@@ -73,22 +66,18 @@ bool GStreamerProcess::stop(std::int32_t timeoutMs) {
     }
 
     // gst-launch -e handles SIGINT similarly to Ctrl+C and tries to send EOS.
-    std::cerr << "[VIDEO][PROCESS] send SIGINT to gst-launch pid="
-          << pid_ << "\n";
     ::kill(-pid_, SIGINT);
     if (waitForExit(timeoutMs)) {
         pid_ = -1;
         return true;
     }
-std::cerr << "[VIDEO][PROCESS] SIGINT timeout, send SIGTERM to gst-launch pid="
-          << pid_ << "\n";
+
     ::kill(-pid_, SIGTERM);
     if (waitForExit(500)) {
         pid_ = -1;
         return true;
     }
-std::cerr << "[VIDEO][PROCESS] SIGTERM timeout, send SIGKILL to gst-launch pid="
-          << pid_ << "\n";
+
     ::kill(-pid_, SIGKILL);
     if (waitForExit(500)) {
         pid_ = -1;

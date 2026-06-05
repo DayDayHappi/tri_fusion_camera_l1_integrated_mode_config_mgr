@@ -39,14 +39,13 @@ enum class CompositeSensorRegister : std::uint16_t {
     LowlightContrast = 0x6518,
     InfraredBrightness = 0x651C,
     InfraredContrast = 0x6520,
-    ContourMode = 0x652C,
     InfraredRegistrationZoom = 0x6730,
     InfraredRegistrationOffsetX = 0x6732,
     InfraredRegistrationOffsetY = 0x6734,
     LowlightRegistrationZoom = 0x6736,
     LowlightRegistrationOffsetX = 0x6738,
     LowlightRegistrationOffsetY = 0x673A,
-    SaveConfig = 0x6510,
+    SaveConfig = 0xFFFF, // 如果厂家文档后续给出明确地址，请替换为真实地址。
 };
 
 enum class FusionColor : std::uint16_t {
@@ -56,15 +55,6 @@ enum class FusionColor : std::uint16_t {
     Ocean = 4,
     City = 5,
     Desert = 6,
-    Default = 7,
-};
-
-enum class ContourMode : std::uint16_t {
-    Off = 0,
-    Red = 1,
-    Green = 2,
-    Blue = 3,
-    Purple = 4,
 };
 
 enum class InfraredPolarity : std::uint16_t {
@@ -89,9 +79,6 @@ struct CompositeSensorAck {
 };
 
 std::string toString(CompositeSensorOutputMode mode);
-std::string toString(FusionColor color);
-std::string toString(ContourMode mode);
-std::string toString(InfraredPolarity polarity);
 CompositeSensorOutputMode compositeSensorOutputModeFromString(const std::string& text);
 std::uint16_t outputModeRegisterValue(CompositeSensorOutputMode mode);
 CompositeSensorOutputMode outputModeFromRegisterValue(std::uint16_t value);

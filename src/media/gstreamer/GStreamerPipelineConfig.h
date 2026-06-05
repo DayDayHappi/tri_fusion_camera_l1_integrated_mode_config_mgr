@@ -21,11 +21,7 @@ struct GStreamerPipelineConfig {
 
     // Supported values:
     //   raw / yuy2 / yuyv / yuyv422  -> video/x-raw ! mpph264enc
-    //   mjpeg / mjpg / jpeg          -> image/jpeg ! mppjpegdec ! mpph264enc
-    // The MJPEG path intentionally avoids jpegparse/jpegdec/videoconvert for RK3588:
-    //   - jpegparse reports invalid APP1 data on the current visible UVC camera.
-    //   - jpegdec is software JPEG decode and caused high CPU usage.
-    //   - mppjpegdec is Rockchip MPP JPEG hardware decode and has been verified.
+    //   mjpeg / mjpg / jpeg          -> image/jpeg ! jpegdec ! videoconvert ! mpph264enc
     std::string inputCodec{"raw"};
     std::string rawFormat{"YUY2"};
     std::int32_t width{800};

@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <chrono>
 #include <thread>
-#include <sstream>
 
 namespace tri::device_control {
 using tri::foundation::ErrorCode;
@@ -22,12 +21,6 @@ using tri::foundation::Status;
 namespace {
 constexpr std::size_t kWriteAckBytes = 10;
 constexpr std::size_t kReadAckBytes = 12;
-
-std::string hexWord(std::uint16_t value) {
-    std::ostringstream oss;
-    oss << "0x" << std::hex << std::uppercase << value;
-    return oss.str();
-}
 }
 
 CompositeSensorController::~CompositeSensorController() {
@@ -161,17 +154,8 @@ Result<std::uint16_t> CompositeSensorController::readRegister(std::uint16_t addr
         return Result<std::uint16_t>::error(ackRet.status().code(), ackRet.status().describe());
     }
 
-    const auto& ack = ackRet.value();
-    TRI_LOG_INFO(LogCategory::Serial)
-        << "read composite sensor register ACK OK addr=0x"
-        << std::hex << std::uppercase << address
-        << ", value=0x" << ack.data
-        << std::dec << " (" << ack.data << ")"
-        << ", status=" << toString(ack.status)
-        << ", checksum=" << hexWord(ack.checksum);
-
     state_.lastError.clear();
-    return Result<std::uint16_t>::ok(ack.data);
+    return Result<std::uint16_t>::ok(ackRet.value().data);
 }
 
 Result<void> CompositeSensorController::writeRegister(std::uint16_t address, std::uint16_t value) {
@@ -194,22 +178,12 @@ Result<void> CompositeSensorController::writeRegister(std::uint16_t address, std
         return ret;
     }
 
-    TRI_LOG_INFO(LogCategory::Serial)
-        << "write composite sensor register ACK OK addr=0x"
-        << std::hex << std::uppercase << address
-        << ", value=0x" << value << std::dec
-        << "; write succeeded";
-
     state_.lastError.clear();
     return Result<void>::success();
 }
 
 Result<void> CompositeSensorController::setFusionColor(FusionColor color) {
     return writeRegister(CompositeSensorRegister::FusionColor, static_cast<std::uint16_t>(color));
-}
-
-Result<void> CompositeSensorController::setContourMode(ContourMode mode) {
-    return writeRegister(CompositeSensorRegister::ContourMode, static_cast<std::uint16_t>(mode));
 }
 
 Result<void> CompositeSensorController::setInfraredPolarity(InfraredPolarity polarity) {
@@ -348,21 +322,10 @@ Result<void> CompositeSensorController::sendWriteOnce(const std::vector<std::uin
         return Result<void>::error(readRet.status().code(), readRet.status().describe());
     }
 
-    TRI_LOG_INFO(LogCategory::Serial)
-        << "serial RX write-register ACK raw=" << tri::foundation::bytes::toHex(readRet.value());
-
     auto ackRet = parser_.parseWriteRegisterAck(readRet.value());
     if (!ackRet) {
-        TRI_LOG_WARN(LogCategory::Serial)
-            << "serial write-register ACK parse failed: " << ackRet.status().describe();
         return Result<void>::error(ackRet.status().code(), ackRet.status().describe());
     }
-
-    const auto& ack = ackRet.value();
-    TRI_LOG_INFO(LogCategory::Serial)
-        << "serial write-register ACK parsed status=" << toString(ack.status)
-        << ", checksum=" << hexWord(ack.checksum)
-        << ", expected_checksum=" << hexWord(ack.expectedChecksum);
     return Result<void>::success();
 }
 
@@ -378,23 +341,7 @@ CompositeSensorController::sendReadOnce(const std::vector<std::uint8_t>& command
         return Result<CompositeSensorAck>::error(readRet.status().code(), readRet.status().describe());
     }
 
-    TRI_LOG_INFO(LogCategory::Serial)
-        << "serial RX read-register ACK raw=" << tri::foundation::bytes::toHex(readRet.value());
-
-    auto ackRet = parser_.parseReadRegisterAck(readRet.value());
-    if (!ackRet) {
-        TRI_LOG_WARN(LogCategory::Serial)
-            << "serial read-register ACK parse failed: " << ackRet.status().describe();
-        return ackRet;
-    }
-
-    const auto& ack = ackRet.value();
-    TRI_LOG_INFO(LogCategory::Serial)
-        << "serial read-register ACK parsed status=" << toString(ack.status)
-        << ", data=" << hexWord(ack.data) << " (" << ack.data << ")"
-        << ", checksum=" << hexWord(ack.checksum)
-        << ", expected_checksum=" << hexWord(ack.expectedChecksum);
-    return ackRet;
+    return parser_.parseReadRegisterAck(readRet.value());
 }
 
 Result<std::vector<std::uint8_t>> CompositeSensorController::readExact(std::size_t expectedBytes,
