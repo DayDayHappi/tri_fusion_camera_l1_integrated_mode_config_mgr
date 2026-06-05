@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <sstream>
-
+#include <iostream>
 namespace tri::media::gstreamer {
 
 namespace {
@@ -20,6 +20,12 @@ std::string lowerCopy(std::string s) {
 std::vector<std::string> GStreamerPipelineBuilder::buildUdpMpegTsH264Args(
     const GStreamerPipelineConfig& config) {
     std::vector<std::string> args;
+
+    std::cerr << "[VIDEO][PATH] stage[01] V4L2 capture: "
+              << config.device
+              << " io-mode=" << config.ioMode
+              << " source=" << config.sourceName
+              << "\n";
 
     args.emplace_back(config.gstLaunchPath);
 
@@ -43,13 +49,18 @@ std::vector<std::string> GStreamerPipelineBuilder::buildUdpMpegTsH264Args(
              << ",height=" << config.height
              << ",framerate=" << config.fps << "/1";
         args.emplace_back(caps.str());
-
+        std::cerr << "[VIDEO][PATH] stage[02] input caps: "
+          << caps.str() << "\n";
+        std::cerr << "[VIDEO][PATH] stage[03] decode: mppjpegdec, MJPEG -> raw video by Rockchip MPP\n";
         // The visible camera outputs MJPEG at high frame rates. Use Rockchip MPP JPEG
         // hardware decoder directly. Do not insert jpegparse here: this UVC camera emits
         // APP1 data that jpegparse reports as invalid, while mppjpegdec can consume the
         // image/jpeg stream directly.
         args.emplace_back("!");
         args.emplace_back("mppjpegdec");
+        std::cerr << "[VIDEO][PATH] stage[04] encode: "
+          << config.encoder
+          << ", raw video -> H.264\n";
     } else {
         std::ostringstream caps;
         caps << "video/x-raw"
@@ -66,17 +77,25 @@ std::vector<std::string> GStreamerPipelineBuilder::buildUdpMpegTsH264Args(
     args.emplace_back("!");
     args.emplace_back("h264parse");
     args.emplace_back("config-interval=" + std::to_string(config.h264ConfigInterval));
-
+    std::cerr << "[VIDEO][PATH] stage[05] parse: h264parse config-interval="
+          << config.h264ConfigInterval << "\n";
     args.emplace_back("!");
     args.emplace_back(config.muxer);
-
+    std::cerr << "[VIDEO][PATH] stage[06] mux: "
+          << config.muxer
+          << ", H.264 -> MPEG-TS\n";
     args.emplace_back("!");
     args.emplace_back("udpsink");
     args.emplace_back("host=" + config.udpHost);
     args.emplace_back("port=" + std::to_string(config.udpPort));
     args.emplace_back("sync=" + boolToGst(config.udpSync));
     args.emplace_back("async=" + boolToGst(config.udpAsync));
-
+    std::cerr << "[VIDEO][PATH] stage[07] output: udpsink host="
+          << config.udpHost
+          << " port=" << config.udpPort
+          << " sync=" << boolToGst(config.udpSync)
+          << " async=" << boolToGst(config.udpAsync)
+          << "\n";
     return args;
 }
 

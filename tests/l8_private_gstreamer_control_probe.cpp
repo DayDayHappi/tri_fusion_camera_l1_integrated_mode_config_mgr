@@ -368,7 +368,9 @@ int main(int argc, char** argv) {
     } else {
         std::cout << "[WARN] serial control disabled, HTTP mode command will only switch video pipeline source.\n";
     }
-
+    std::cerr << "[VIDEO][MAIN] initial pipeline start\n";
+std::cerr << "[VIDEO][MAIN] initial mode=lowlight_thermal\n";
+std::cerr << "[VIDEO][MAIN] command_line=" << pipeline.commandLine() << "\n";
     if (!pipeline.start()) {
         std::cerr << "[ERROR] failed to start GStreamer pipeline: " << pipeline.lastError() << "\n";
         compositeController.shutdown();
@@ -379,6 +381,7 @@ int main(int argc, char** argv) {
     PrivateControlServer server;
 
     auto switchCallback = [&](PrivateWorkMode targetMode) -> PrivateControlResult {
+        std::cerr << "[VIDEO][MODE] switch request received\n";
         std::lock_guard<std::mutex> lock(pipelineMutex);
         PrivateControlResult result;
         result.currentMode = toString(currentMode);
@@ -411,6 +414,7 @@ int main(int argc, char** argv) {
                       << tri::device_control::toString(compositeMode) << "\n";
             auto switchRet = compositeController.setOutputMode(compositeMode);
             if (!switchRet) {
+                std::cerr << "[VIDEO][MODE] starting new pipeline after mode switch\n";
                 pipeline.start();
                 result.ok = false;
                 result.message = "serial setOutputMode failed: " + switchRet.status().describe();
@@ -418,6 +422,7 @@ int main(int argc, char** argv) {
             }
             auto stableRet = compositeController.waitStable(stableMs);
             if (!stableRet) {
+                std::cerr << "[VIDEO][MODE] starting new pipeline after mode switch\n";
                 pipeline.start();
                 result.ok = false;
                 result.message = "serial waitStable failed: " + stableRet.status().describe();
@@ -427,6 +432,20 @@ int main(int argc, char** argv) {
 
         pipeline.setConfig(targetVideoConfig);
         currentMode = targetMode;
+
+std::cerr << "[VIDEO][MODE] new pipeline config:"
+          << " source=" << targetVideoConfig.sourceName
+          << " device=" << targetVideoConfig.device
+          << " input_codec=" << targetVideoConfig.inputCodec
+          << " raw_format=" << targetVideoConfig.rawFormat
+          << " size=" << targetVideoConfig.width << "x" << targetVideoConfig.height
+          << " fps=" << targetVideoConfig.fps
+          << " udp=" << targetVideoConfig.udpHost << ":" << targetVideoConfig.udpPort
+          << "\n";
+
+std::cerr << "[VIDEO][MODE] new command_line="
+          << pipeline.commandLine()
+          << "\n";
 
         std::cout << "[VIDEO] starting source=" << targetVideoConfig.sourceName
                   << " device=" << targetVideoConfig.device
@@ -538,6 +557,7 @@ int main(int argc, char** argv) {
 
     if (!server.start(controlCfg, switchCallback, compositeControlCallback, compositeConfigQueryCallback)) {
         std::cerr << "[ERROR] failed to start private control server: " << server.lastError() << "\n";
+        std::cerr << "[VIDEO][MODE] stopping old pipeline before mode switch\n";
         pipeline.stop();
         compositeController.shutdown();
         return 1;
