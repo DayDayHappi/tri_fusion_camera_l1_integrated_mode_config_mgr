@@ -53,12 +53,6 @@ struct RgbFrame {
     std::vector<std::uint8_t> rgb; // packed RGB, width * height * 3
 };
 
-struct LightStats {
-    double meanLuma = 0.0;          // 平均亮度，范围 0~255
-    double darkPixelRatio = 0.0;    // 暗像素比例，范围 0~1
-    double brightPixelRatio = 0.0;  // 亮像素比例，范围 0~1
-};
-
 void printUsage(const char* program) {
     std::cout
         << "Usage:\n"
@@ -339,61 +333,6 @@ bool pullRgbFrame(GstElement* appsink, const std::string& name, RgbFrame* out) {
     return true;
 }
 
-LightStats computeLightStatsRgb(const RgbFrame& frame) {
-    LightStats stats;
-
-    if (frame.width <= 0 || frame.height <= 0 || frame.rgb.empty()) {
-        return stats;
-    }
-
-    // 当前只是观测日志，不参与融合控制。
-    // 为了降低额外 CPU 开销，亮度统计采用间隔采样。
-    constexpr int sampleStep = 8;
-    constexpr int darkThreshold = 25;
-    constexpr int brightThreshold = 180;
-
-    std::uint64_t lumaSum = 0;
-    std::uint64_t sampleCount = 0;
-    std::uint64_t darkCount = 0;
-    std::uint64_t brightCount = 0;
-
-    for (int y = 0; y < frame.height; y += sampleStep) {
-        const std::uint8_t* row = frame.rgb.data() +
-            static_cast<std::size_t>(y) * static_cast<std::size_t>(frame.width) * 3;
-
-        for (int x = 0; x < frame.width; x += sampleStep) {
-            const std::uint8_t* p = row + static_cast<std::size_t>(x) * 3;
-
-            const int r = p[0];
-            const int g = p[1];
-            const int b = p[2];
-
-            // RGB -> luma，整数近似：Y ≈ 0.299R + 0.587G + 0.114B
-            const int luma = (77 * r + 150 * g + 29 * b) >> 8;
-
-            lumaSum += static_cast<std::uint64_t>(luma);
-            ++sampleCount;
-
-            if (luma < darkThreshold) {
-                ++darkCount;
-            }
-            if (luma > brightThreshold) {
-                ++brightCount;
-            }
-        }
-    }
-
-    if (sampleCount == 0) {
-        return stats;
-    }
-
-    stats.meanLuma = static_cast<double>(lumaSum) / static_cast<double>(sampleCount);
-    stats.darkPixelRatio = static_cast<double>(darkCount) / static_cast<double>(sampleCount);
-    stats.brightPixelRatio = static_cast<double>(brightCount) / static_cast<double>(sampleCount);
-
-    return stats;
-}
-
 inline std::uint8_t clampToByte(int v) {
     if (v < 0) return 0;
     if (v > 255) return 255;
@@ -604,19 +543,6 @@ int main(int argc, char** argv) {
         }
         if (!pullRgbFrame(compositeSink, "COMPOSITE_IN", &composite)) {
             continue;
-        }
-
-        const LightStats visibleLightStats = computeLightStatsRgb(visible);
-        if ((frameIndex % static_cast<std::uint64_t>(std::max(1, opt.fps))) == 0) {
-            std::cerr << "[LIGHT] frame=" << frameIndex
-                      << " meanLuma=" << std::fixed << std::setprecision(2)
-                      << visibleLightStats.meanLuma
-                      << " darkPixelRatio=" << visibleLightStats.darkPixelRatio
-                      << " brightPixelRatio=" << visibleLightStats.brightPixelRatio
-                      << " thresholds={dark<25,bright>180}"
-                      << " sampleStep=8"
-                      << " visible=" << visible.width << "x" << visible.height
-                      << "\n";
         }
 
         std::vector<std::uint8_t> fusedRgb = fuseRgbResizeNearest(visible, composite, opt.alpha);
