@@ -59,28 +59,6 @@ struct LightStats {
     double brightPixelRatio = 0.0;  // 亮像素比例，范围 0~1
 };
 
-enum class LightScene {
-    DAY,
-    DUSK,
-    NIGHT,
-};
-
-const char* lightSceneName(LightScene scene) {
-    switch (scene) {
-        case LightScene::DAY: return "DAY";
-        case LightScene::DUSK: return "DUSK";
-        case LightScene::NIGHT: return "NIGHT";
-    }
-    return "UNKNOWN";
-}
-
-struct LightSceneState {
-    LightScene current = LightScene::DAY;
-    LightScene candidate = LightScene::DAY;
-    std::chrono::steady_clock::time_point candidateSince{};
-    bool hasCandidateSince = false;
-};
-
 void printUsage(const char* program) {
     std::cout
         << "Usage:\n"
@@ -416,107 +394,16 @@ LightStats computeLightStatsRgb(const RgbFrame& frame) {
     return stats;
 }
 
-LightScene classifyLightSceneCandidate(const LightStats& stats) {
-    // 极暗：平均亮度低，同时大部分像素都处于暗区。
-    if (stats.meanLuma < 25.0 && stats.darkPixelRatio > 0.75) {
-        return LightScene::NIGHT;
-    }
-
-    // 明亮：平均亮度高，同时暗像素比例低。
-    if (stats.meanLuma > 100.0 && stats.darkPixelRatio < 0.30) {
-        return LightScene::DAY;
-    }
-
-    // 中间过渡区统一视为 DUSK。这里包含傍晚、室内弱光、局部强光等场景。
-    return LightScene::DUSK;
-}
-
-void updateLightSceneState(LightSceneState* state,
-                           LightScene candidate,
-                           std::chrono::steady_clock::time_point now) {
-    if (state == nullptr) {
-        return;
-    }
-
-    constexpr auto stableDuration = std::chrono::seconds(3);
-
-    if (!state->hasCandidateSince || state->candidate != candidate) {
-        state->candidate = candidate;
-        state->candidateSince = now;
-        state->hasCandidateSince = true;
-        return;
-    }
-
-    if (state->current != candidate && now - state->candidateSince >= stableDuration) {
-        std::cerr << "[LIGHT][STATE] " << lightSceneName(state->current)
-                  << " -> " << lightSceneName(candidate)
-                  << " after stable_ms="
-                  << std::chrono::duration_cast<std::chrono::milliseconds>(now - state->candidateSince).count()
-                  << "\n";
-        state->current = candidate;
-    }
-}
-
-double clampDouble(double value, double minValue, double maxValue) {
-    if (value < minValue) return minValue;
-    if (value > maxValue) return maxValue;
-    return value;
-}
-
-double computeTargetVisibleWeight(const LightStats& stats,
-                                  LightScene scene,
-                                  double maxVisibleWeight) {
-    maxVisibleWeight = clampDouble(maxVisibleWeight, 0.0, 1.0);
-
-    if (scene == LightScene::NIGHT) {
-        // 方案 A：不关闭可见光 pipeline，但融合时完全不用可见光数据。
-        return 0.0;
-    }
-
-    if (scene == LightScene::DAY) {
-        return maxVisibleWeight;
-    }
-
-    // DUSK：根据亮度在 0 ~ maxVisibleWeight 之间平滑变化。
-    constexpr double minUsefulLuma = 25.0;
-    constexpr double dayLikeLuma = 100.0;
-
-    double t = (stats.meanLuma - minUsefulLuma) / (dayLikeLuma - minUsefulLuma);
-    t = clampDouble(t, 0.0, 1.0);
-
-    // 暗像素比例越高，可见光可信度越低。
-    if (stats.darkPixelRatio > 0.70) {
-        t *= 0.35;
-    } else if (stats.darkPixelRatio > 0.50) {
-        t *= 0.65;
-    }
-
-    // 少量强光点、整体仍然偏暗时，避免被路灯/车灯误导。
-    if (stats.brightPixelRatio > 0.08 && stats.meanLuma < 50.0) {
-        t *= 0.60;
-    }
-
-    return clampDouble(t * maxVisibleWeight, 0.0, maxVisibleWeight);
-}
-
-double smoothVisibleWeight(double previousWeight, double targetWeight) {
-    // 越小变化越慢；0.05 表示每帧向目标值靠近 5%。
-    constexpr double smoothFactor = 0.05;
-    previousWeight = clampDouble(previousWeight, 0.0, 1.0);
-    targetWeight = clampDouble(targetWeight, 0.0, 1.0);
-    return previousWeight * (1.0 - smoothFactor) + targetWeight * smoothFactor;
-}
-
 inline std::uint8_t clampToByte(int v) {
     if (v < 0) return 0;
     if (v > 255) return 255;
     return static_cast<std::uint8_t>(v);
 }
 
-std::vector<std::uint8_t> fuseRgbResizeNearestAdaptive(
+std::vector<std::uint8_t> fuseRgbResizeNearest(
     const RgbFrame& visible,
     const RgbFrame& composite,
-    double visibleWeight) {
+    double alpha) {
     std::vector<std::uint8_t> out;
     if (visible.width <= 0 || visible.height <= 0 ||
         composite.width <= 0 || composite.height <= 0) {
@@ -524,8 +411,8 @@ std::vector<std::uint8_t> fuseRgbResizeNearestAdaptive(
     }
 
     out.resize(static_cast<std::size_t>(visible.width) * visible.height * 3);
-    const double visibleRatio = clampDouble(visibleWeight, 0.0, 1.0);
-    const double compositeRatio = 1.0 - visibleRatio;
+    const double visibleRatio = 1.0 - alpha;
+    const double compositeRatio = alpha;
 
     for (int y = 0; y < visible.height; ++y) {
         const int cy = std::min(composite.height - 1,
@@ -651,15 +538,9 @@ int main(int argc, char** argv) {
     std::cerr << "[CONFIG] composite=" << opt.compositeDevice
               << " YUY2 " << opt.compositeWidth << "x" << opt.compositeHeight
               << "@" << opt.fps << "\n";
-    std::cerr << "[CONFIG] fusion=RGB adaptive_visible_weight"
-              << " max_visible_weight=" << (1.0 - opt.alpha)
-              << " initial_composite_alpha=" << opt.alpha
+    std::cerr << "[CONFIG] fusion=RGB alpha_blend alpha=" << opt.alpha
               << " output=NV12 " << opt.visibleWidth << "x" << opt.visibleHeight
               << " -> mpph264enc -> udp " << opt.host << ":" << opt.port << "\n";
-    std::cerr << "[CONFIG] light_state thresholds: "
-              << "NIGHT(mean<25,dark>0.75,stable>=3s), "
-              << "DAY(mean>100,dark<0.30,stable>=3s), "
-              << "DUSK(other stable>=3s); visible pipeline keeps running in NIGHT\n";
 
     GstElement* visiblePipeline = parsePipelineOrNull("VISIBLE_IN", buildVisiblePipelineDesc(opt));
     GstElement* compositePipeline = parsePipelineOrNull("COMPOSITE_IN", buildCompositePipelineDesc(opt));
@@ -708,10 +589,6 @@ int main(int argc, char** argv) {
     const auto startTime = std::chrono::steady_clock::now();
     auto lastReport = startTime;
 
-    LightSceneState lightState;
-    double visibleWeight = clampDouble(1.0 - opt.alpha, 0.0, 1.0);
-    double targetVisibleWeight = visibleWeight;
-
     while (!g_stop.load()) {
         if (!checkBus("VISIBLE_IN", visiblePipeline) ||
             !checkBus("COMPOSITE_IN", compositePipeline) ||
@@ -730,34 +607,19 @@ int main(int argc, char** argv) {
         }
 
         const LightStats visibleLightStats = computeLightStatsRgb(visible);
-        const auto nowForLight = std::chrono::steady_clock::now();
-        const LightScene candidateScene = classifyLightSceneCandidate(visibleLightStats);
-        updateLightSceneState(&lightState, candidateScene, nowForLight);
-
-        targetVisibleWeight = computeTargetVisibleWeight(
-            visibleLightStats,
-            lightState.current,
-            clampDouble(1.0 - opt.alpha, 0.0, 1.0));
-        visibleWeight = smoothVisibleWeight(visibleWeight, targetVisibleWeight);
-
         if ((frameIndex % static_cast<std::uint64_t>(std::max(1, opt.fps))) == 0) {
             std::cerr << "[LIGHT] frame=" << frameIndex
                       << " meanLuma=" << std::fixed << std::setprecision(2)
                       << visibleLightStats.meanLuma
                       << " darkPixelRatio=" << visibleLightStats.darkPixelRatio
                       << " brightPixelRatio=" << visibleLightStats.brightPixelRatio
-                      << " scene=" << lightSceneName(lightState.current)
-                      << " candidate=" << lightSceneName(lightState.candidate)
-                      << " targetVisibleWeight=" << targetVisibleWeight
-                      << " visibleWeight=" << visibleWeight
-                      << " compositeWeight=" << (1.0 - visibleWeight)
-                      << " thresholds={night:mean<25,dark>0.75;day:mean>100,dark<0.30}"
+                      << " thresholds={dark<25,bright>180}"
                       << " sampleStep=8"
                       << " visible=" << visible.width << "x" << visible.height
                       << "\n";
         }
 
-        std::vector<std::uint8_t> fusedRgb = fuseRgbResizeNearestAdaptive(visible, composite, visibleWeight);
+        std::vector<std::uint8_t> fusedRgb = fuseRgbResizeNearest(visible, composite, opt.alpha);
         if (fusedRgb.empty()) {
             std::cerr << "[ERROR][FUSION] failed to fuse RGB frames\n";
             break;
@@ -777,11 +639,7 @@ int main(int argc, char** argv) {
             std::cerr << "[FRAME] pushed=" << frameIndex
                       << " visible=" << visible.width << "x" << visible.height
                       << " composite=" << composite.width << "x" << composite.height
-                      << " fused_nv12=" << fusedNv12.size() << " bytes"
-                      << " scene=" << lightSceneName(lightState.current)
-                      << " visibleWeight=" << std::fixed << std::setprecision(2) << visibleWeight
-                      << " compositeWeight=" << (1.0 - visibleWeight)
-                      << "\n";
+                      << " fused_nv12=" << fusedNv12.size() << " bytes\n";
         }
 
         const auto now = std::chrono::steady_clock::now();
