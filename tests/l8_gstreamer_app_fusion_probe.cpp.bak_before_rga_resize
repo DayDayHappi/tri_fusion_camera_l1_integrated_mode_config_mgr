@@ -111,7 +111,7 @@ void printUsage(const char* program) {
         << "Pipeline:\n"
         << "  visible:   v4l2src(MJPG) -> mppjpegdec -> convert -> RGB -> appsink\n"
         << "  composite: v4l2src(YUY2) -> convert -> RGB -> appsink\n"
-        << "  C++:       RGA resize composite RGB -> adaptive alpha blend -> RGA RGB888 to NV12\n"
+        << "  C++:       RGB resize + adaptive alpha blend -> RGA RGB888 to NV12\n"
         << "  output:    appsrc(NV12) -> mpph264enc -> h264parse -> mpegtsmux -> udpsink\n";
 }
 
@@ -523,179 +523,34 @@ inline std::uint8_t clampToByte(int v) {
     return static_cast<std::uint8_t>(v);
 }
 
-void cpuResizeRgbNearest(const RgbFrame& src,
-                         int dstWidth,
-                         int dstHeight,
-                         RgbFrame* dst) {
-    if (dst == nullptr) {
-        return;
-    }
-
-    dst->width = 0;
-    dst->height = 0;
-    dst->pts = src.pts;
-    dst->rgb.clear();
-
-    if (src.width <= 0 || src.height <= 0 ||
-        dstWidth <= 0 || dstHeight <= 0 ||
-        src.rgb.empty()) {
-        return;
-    }
-
-    dst->width = dstWidth;
-    dst->height = dstHeight;
-    dst->rgb.resize(static_cast<std::size_t>(dstWidth) *
-                    static_cast<std::size_t>(dstHeight) * 3);
-
-    for (int y = 0; y < dstHeight; ++y) {
-        const int sy = std::min(src.height - 1,
-                                static_cast<int>((static_cast<long long>(y) * src.height) / dstHeight));
-        for (int x = 0; x < dstWidth; ++x) {
-            const int sx = std::min(src.width - 1,
-                                    static_cast<int>((static_cast<long long>(x) * src.width) / dstWidth));
-
-            const std::size_t si =
-                (static_cast<std::size_t>(sy) * src.width + sx) * 3;
-            const std::size_t di =
-                (static_cast<std::size_t>(y) * dstWidth + x) * 3;
-
-            dst->rgb[di + 0] = src.rgb[si + 0];
-            dst->rgb[di + 1] = src.rgb[si + 1];
-            dst->rgb[di + 2] = src.rgb[si + 2];
-        }
-    }
-}
-
-bool rgaResizeRgb888(const RgbFrame& src,
-                     int dstWidth,
-                     int dstHeight,
-                     RgbFrame* dst) {
-    if (dst == nullptr) {
-        return false;
-    }
-
-    dst->width = 0;
-    dst->height = 0;
-    dst->pts = src.pts;
-    dst->rgb.clear();
-
-    if (src.width <= 0 || src.height <= 0 ||
-        dstWidth <= 0 || dstHeight <= 0 ||
-        src.rgb.empty()) {
-        std::cerr << "[WARN][RGA_RESIZE] invalid RGB resize input, fallback to CPU\n";
-        cpuResizeRgbNearest(src, dstWidth, dstHeight, dst);
-        return !dst->rgb.empty();
-    }
-
-    const std::size_t expectedSrcSize =
-        static_cast<std::size_t>(src.width) *
-        static_cast<std::size_t>(src.height) * 3;
-
-    if (src.rgb.size() < expectedSrcSize) {
-        std::cerr << "[WARN][RGA_RESIZE] source RGB buffer too small, got="
-                  << src.rgb.size() << " expected=" << expectedSrcSize
-                  << ", fallback to CPU\n";
-        cpuResizeRgbNearest(src, dstWidth, dstHeight, dst);
-        return !dst->rgb.empty();
-    }
-
-    dst->width = dstWidth;
-    dst->height = dstHeight;
-    dst->pts = src.pts;
-    dst->rgb.assign(static_cast<std::size_t>(dstWidth) *
-                    static_cast<std::size_t>(dstHeight) * 3, 0);
-
-#if TRI_FUSION_HAS_RGA
-    rga_buffer_t srcBuf = wrapbuffer_virtualaddr(
-        const_cast<std::uint8_t*>(src.rgb.data()),
-        src.width,
-        src.height,
-        RK_FORMAT_RGB_888,
-        src.width,
-        src.height);
-
-    rga_buffer_t dstBuf = wrapbuffer_virtualaddr(
-        dst->rgb.data(),
-        dstWidth,
-        dstHeight,
-        RK_FORMAT_RGB_888,
-        dstWidth,
-        dstHeight);
-
-    // 不调用 imcheck()：当前交叉环境中的 imcheck 变参宏会触发
-    // “大小为 0 的数组 __args” 编译错误。直接调用 imresize() 并检查返回值。
-    IM_STATUS ret = imresize(srcBuf, dstBuf);
-    if (ret != IM_STATUS_SUCCESS) {
-        std::cerr << "[WARN][RGA_RESIZE] imresize RGB888 "
-                  << src.width << "x" << src.height << " -> "
-                  << dstWidth << "x" << dstHeight << " failed: "
-                  << imStrError(ret) << ", fallback to CPU resize\n";
-        cpuResizeRgbNearest(src, dstWidth, dstHeight, dst);
-        return !dst->rgb.empty();
-    }
-
-    static bool successLogged = false;
-    if (!successLogged) {
-        std::cerr << "[OK][RGA_RESIZE] RGB888 resize active, "
-                  << src.width << "x" << src.height << " -> "
-                  << dstWidth << "x" << dstHeight << "\n";
-        successLogged = true;
-    }
-
-    return true;
-#else
-    static bool warned = false;
-    if (!warned) {
-        std::cerr << "[WARN][RGA_RESIZE] RGA headers not found at compile time, "
-                  << "using CPU resize fallback\n";
-        warned = true;
-    }
-
-    cpuResizeRgbNearest(src, dstWidth, dstHeight, dst);
-    return !dst->rgb.empty();
-#endif
-}
-
-std::vector<std::uint8_t> fuseRgbSameSizeAdaptive(
+std::vector<std::uint8_t> fuseRgbResizeNearestAdaptive(
     const RgbFrame& visible,
-    const RgbFrame& compositeSameSize,
+    const RgbFrame& composite,
     double visibleWeight) {
     std::vector<std::uint8_t> out;
-
     if (visible.width <= 0 || visible.height <= 0 ||
-        compositeSameSize.width <= 0 || compositeSameSize.height <= 0 ||
-        visible.width != compositeSameSize.width ||
-        visible.height != compositeSameSize.height ||
-        visible.rgb.empty() || compositeSameSize.rgb.empty()) {
+        composite.width <= 0 || composite.height <= 0) {
         return out;
     }
 
-    const std::size_t pixelCount =
-        static_cast<std::size_t>(visible.width) *
-        static_cast<std::size_t>(visible.height);
-
-    const std::size_t rgbSize = pixelCount * 3;
-    if (visible.rgb.size() < rgbSize || compositeSameSize.rgb.size() < rgbSize) {
-        return out;
-    }
-
-    out.resize(rgbSize);
-
+    out.resize(static_cast<std::size_t>(visible.width) * visible.height * 3);
     const double visibleRatio = clampDouble(visibleWeight, 0.0, 1.0);
     const double compositeRatio = 1.0 - visibleRatio;
 
-    for (std::size_t i = 0; i < rgbSize; i += 3) {
-        out[i + 0] = clampToByte(static_cast<int>(
-            visible.rgb[i + 0] * visibleRatio +
-            compositeSameSize.rgb[i + 0] * compositeRatio));
+    for (int y = 0; y < visible.height; ++y) {
+        const int cy = std::min(composite.height - 1,
+                                static_cast<int>((static_cast<long long>(y) * composite.height) / visible.height));
+        for (int x = 0; x < visible.width; ++x) {
+            const int cx = std::min(composite.width - 1,
+                                    static_cast<int>((static_cast<long long>(x) * composite.width) / visible.width));
 
-        out[i + 1] = clampToByte(static_cast<int>(
-            visible.rgb[i + 1] * visibleRatio +
-            compositeSameSize.rgb[i + 1] * compositeRatio));
+            const std::size_t vi = (static_cast<std::size_t>(y) * visible.width + x) * 3;
+            const std::size_t ci = (static_cast<std::size_t>(cy) * composite.width + cx) * 3;
 
-        out[i + 2] = clampToByte(static_cast<int>(
-            visible.rgb[i + 2] * visibleRatio +
-            compositeSameSize.rgb[i + 2] * compositeRatio));
+            out[vi + 0] = clampToByte(static_cast<int>(visible.rgb[vi + 0] * visibleRatio + composite.rgb[ci + 0] * compositeRatio));
+            out[vi + 1] = clampToByte(static_cast<int>(visible.rgb[vi + 1] * visibleRatio + composite.rgb[ci + 1] * compositeRatio));
+            out[vi + 2] = clampToByte(static_cast<int>(visible.rgb[vi + 2] * visibleRatio + composite.rgb[ci + 2] * compositeRatio));
+        }
     }
 
     return out;
@@ -763,47 +618,33 @@ bool rgaRgbToNv12(const std::vector<std::uint8_t>& rgb,
     }
 
     if (width <= 0 || height <= 0 || (width % 2) != 0 || (height % 2) != 0) {
-        std::cerr << "[WARN][RGA] invalid size for NV12: "
-                  << width << "x" << height << ", fallback to CPU\n";
+        std::cerr << "[ERROR][RGA] invalid NV12 size " << width << "x" << height << "\n";
         return false;
     }
 
-    const std::size_t rgbSize =
-        static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3;
-
-    const std::size_t nv12Size =
-        static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 3 / 2;
-
-    if (rgb.size() < rgbSize) {
-        std::cerr << "[WARN][RGA] RGB buffer too small, rgb.size="
-                  << rgb.size() << " expected=" << rgbSize
-                  << ", fallback to CPU\n";
+    const std::size_t expectedRgbSize = static_cast<std::size_t>(width) *
+                                        static_cast<std::size_t>(height) * 3;
+    if (rgb.size() < expectedRgbSize) {
+        std::cerr << "[ERROR][RGA] RGB buffer too small, got=" << rgb.size()
+                  << " expected=" << expectedRgbSize << "\n";
         return false;
     }
 
+    const std::size_t ySize = static_cast<std::size_t>(width) *
+                              static_cast<std::size_t>(height);
+    const std::size_t nv12Size = ySize + ySize / 2;
     nv12->assign(nv12Size, 0);
 
-    /*
-     * 注意：
-     * 当前 Buildroot/RGA 版本里的 wrapbuffer_virtualaddr 是变参宏。
-     * 不能只传 4 个参数，否则会触发 “大小为 0 的数组 __args” 编译错误。
-     *
-     * RGB888:
-     *   width stride  = width
-     *   height stride = height
-     *
-     * NV12:
-     *   width stride  = width
-     *   height stride = height
-     */
+#if TRI_FUSION_HAS_RGA
+    // 当前 Buildroot/RGA 版本里的 wrapbuffer_virtualaddr 是变参宏。
+    // 显式传入 wstride/hstride，避免 4 参数形式触发 “大小为 0 的数组 __args” 编译错误。
     rga_buffer_t src = wrapbuffer_virtualaddr(
         const_cast<std::uint8_t*>(rgb.data()),
         width,
         height,
         RK_FORMAT_RGB_888,
         width,
-        height
-    );
+        height);
 
     rga_buffer_t dst = wrapbuffer_virtualaddr(
         nv12->data(),
@@ -811,30 +652,35 @@ bool rgaRgbToNv12(const std::vector<std::uint8_t>& rgb,
         height,
         RK_FORMAT_YCbCr_420_SP,
         width,
-        height
-    );
+        height);
 
     // 不调用 imcheck()：
-    // 当前 Buildroot/RGA 版本里的 imcheck 是变参宏，
-    // 在当前交叉编译环境会展开出 “大小为 0 的数组 __args” 编译错误。
-    // 这里直接调用 imcvtcolor()，用返回值判断 RGA 转换是否成功。
+    // 当前 RGA 头文件里的 imcheck 是变参宏，在当前交叉编译环境会展开出
+    // “大小为 0 的数组 __args” 错误。直接调用 imcvtcolor()，用返回值判断是否成功。
+    IM_STATUS ret = imcvtcolor(
+        src,
+        dst,
+        RK_FORMAT_RGB_888,
+        RK_FORMAT_YCbCr_420_SP);
 
-    IM_STATUS ret = imcvtcolor(src, dst, RK_FORMAT_RGB_888, RK_FORMAT_YCbCr_420_SP);
     if (ret != IM_STATUS_SUCCESS) {
         std::cerr << "[WARN][RGA] imcvtcolor RGB888->NV12 failed: "
-                  << imStrError(ret)
-                  << ", fallback to CPU\n";
-        return false;
-    }
-
-    static bool rgaCvtColorSuccessLogged = false;
-    if (!rgaCvtColorSuccessLogged) {
-        std::cerr << "[OK][RGA_CVT] RGB888 -> NV12 conversion active, size="
-                  << width << "x" << height << "\n";
-        rgaCvtColorSuccessLogged = true;
+                  << imStrError(ret) << ", fallback to CPU rgbToNv12\n";
+        cpuRgbToNv12(rgb, width, height, nv12);
+        return true;
     }
 
     return true;
+#else
+    static bool warned = false;
+    if (!warned) {
+        std::cerr << "[WARN][RGA] RGA headers not found at compile time, "
+                  << "using CPU rgbToNv12 fallback\n";
+        warned = true;
+    }
+    cpuRgbToNv12(rgb, width, height, nv12);
+    return true;
+#endif
 }
 
 bool pushNv12Frame(GstElement* appsrc,
@@ -893,7 +739,6 @@ int main(int argc, char** argv) {
               << " max_visible_weight=" << (1.0 - opt.alpha)
               << " initial_composite_alpha=" << opt.alpha
               << " output=NV12 " << opt.visibleWidth << "x" << opt.visibleHeight
-              << " resize=composite_rgb_to_visible_" << opt.visibleWidth << "x" << opt.visibleHeight
               << " rgb_to_nv12=" << (TRI_FUSION_HAS_RGA ? "RGA(im2d)" : "CPU fallback(no RGA header)")
               << " -> mpph264enc -> udp " << opt.host << ":" << opt.port << "\n";
     std::cerr << "[CONFIG] light_state thresholds: "
@@ -997,19 +842,11 @@ int main(int argc, char** argv) {
                       << "\n";
         }
 
-        RgbFrame resizedComposite;
-        if (!rgaResizeRgb888(composite, visible.width, visible.height, &resizedComposite)) {
-            std::cerr << "[ERROR][FUSION] failed to resize composite RGB frame\n";
-            break;
-        }
-
-        std::vector<std::uint8_t> fusedRgb =
-            fuseRgbSameSizeAdaptive(visible, resizedComposite, visibleWeight);
+        std::vector<std::uint8_t> fusedRgb = fuseRgbResizeNearestAdaptive(visible, composite, visibleWeight);
         if (fusedRgb.empty()) {
-            std::cerr << "[ERROR][FUSION] failed to fuse same-size RGB frames\n";
+            std::cerr << "[ERROR][FUSION] failed to fuse RGB frames\n";
             break;
         }
-
         std::vector<std::uint8_t> fusedNv12;
         if (!rgaRgbToNv12(fusedRgb, visible.width, visible.height, &fusedNv12)) {
             std::cerr << "[WARN][RGA] failed to convert fused RGB to NV12, "
@@ -1034,7 +871,6 @@ int main(int argc, char** argv) {
             std::cerr << "[FRAME] pushed=" << frameIndex
                       << " visible=" << visible.width << "x" << visible.height
                       << " composite=" << composite.width << "x" << composite.height
-                      << " resized_composite=" << resizedComposite.width << "x" << resizedComposite.height
                       << " fused_nv12=" << fusedNv12.size() << " bytes"
                       << " scene=" << lightSceneName(lightState.current)
                       << " visibleWeight=" << std::fixed << std::setprecision(2) << visibleWeight
