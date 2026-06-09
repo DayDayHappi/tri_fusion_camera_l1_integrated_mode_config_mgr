@@ -594,6 +594,7 @@ if(TRI_FUSION_BUILD_TESTS)
     target_link_libraries(l8_gstreamer_app_fusion_probe
         PRIVATE
             ${TRI_FUSION_GSTREAMER_LIBRARIES}
+            rga
             m
             pthread
     )

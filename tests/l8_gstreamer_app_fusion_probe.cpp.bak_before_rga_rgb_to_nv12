@@ -3,16 +3,6 @@
 #include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
 
-#if __has_include(<rga/im2d.h>)
-#include <rga/im2d.h>
-#define TRI_FUSION_HAS_RGA 1
-#elif __has_include(<im2d.h>)
-#include <im2d.h>
-#define TRI_FUSION_HAS_RGA 1
-#else
-#define TRI_FUSION_HAS_RGA 0
-#endif
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -111,7 +101,7 @@ void printUsage(const char* program) {
         << "Pipeline:\n"
         << "  visible:   v4l2src(MJPG) -> mppjpegdec -> convert -> RGB -> appsink\n"
         << "  composite: v4l2src(YUY2) -> convert -> RGB -> appsink\n"
-        << "  C++:       RGB resize + adaptive alpha blend -> RGA RGB888 to NV12\n"
+        << "  C++:       RGB resize + alpha blend -> NV12\n"
         << "  output:    appsrc(NV12) -> mpph264enc -> h264parse -> mpegtsmux -> udpsink\n";
 }
 
@@ -556,10 +546,10 @@ std::vector<std::uint8_t> fuseRgbResizeNearestAdaptive(
     return out;
 }
 
-void cpuRgbToNv12(const std::vector<std::uint8_t>& rgb,
-                  int width,
-                  int height,
-                  std::vector<std::uint8_t>* nv12) {
+void rgbToNv12(const std::vector<std::uint8_t>& rgb,
+               int width,
+               int height,
+               std::vector<std::uint8_t>* nv12) {
     const std::size_t ySize = static_cast<std::size_t>(width) * height;
     const std::size_t uvSize = ySize / 2;
     nv12->assign(ySize + uvSize, 0);
@@ -607,80 +597,6 @@ void cpuRgbToNv12(const std::vector<std::uint8_t>& rgb,
             uvPlane[uvIndex + 1] = clampToByte(vSum / count);
         }
     }
-}
-
-bool rgaRgbToNv12(const std::vector<std::uint8_t>& rgb,
-                  int width,
-                  int height,
-                  std::vector<std::uint8_t>* nv12) {
-    if (nv12 == nullptr) {
-        return false;
-    }
-
-    if (width <= 0 || height <= 0 || (width % 2) != 0 || (height % 2) != 0) {
-        std::cerr << "[ERROR][RGA] invalid NV12 size " << width << "x" << height << "\n";
-        return false;
-    }
-
-    const std::size_t expectedRgbSize = static_cast<std::size_t>(width) *
-                                        static_cast<std::size_t>(height) * 3;
-    if (rgb.size() < expectedRgbSize) {
-        std::cerr << "[ERROR][RGA] RGB buffer too small, got=" << rgb.size()
-                  << " expected=" << expectedRgbSize << "\n";
-        return false;
-    }
-
-    const std::size_t ySize = static_cast<std::size_t>(width) *
-                              static_cast<std::size_t>(height);
-    const std::size_t nv12Size = ySize + ySize / 2;
-    nv12->assign(nv12Size, 0);
-
-#if TRI_FUSION_HAS_RGA
-    // 当前 Buildroot/RGA 版本里的 wrapbuffer_virtualaddr 是变参宏。
-    // 显式传入 wstride/hstride，避免 4 参数形式触发 “大小为 0 的数组 __args” 编译错误。
-    rga_buffer_t src = wrapbuffer_virtualaddr(
-        const_cast<std::uint8_t*>(rgb.data()),
-        width,
-        height,
-        RK_FORMAT_RGB_888,
-        width,
-        height);
-
-    rga_buffer_t dst = wrapbuffer_virtualaddr(
-        nv12->data(),
-        width,
-        height,
-        RK_FORMAT_YCbCr_420_SP,
-        width,
-        height);
-
-    // 不调用 imcheck()：
-    // 当前 RGA 头文件里的 imcheck 是变参宏，在当前交叉编译环境会展开出
-    // “大小为 0 的数组 __args” 错误。直接调用 imcvtcolor()，用返回值判断是否成功。
-    IM_STATUS ret = imcvtcolor(
-        src,
-        dst,
-        RK_FORMAT_RGB_888,
-        RK_FORMAT_YCbCr_420_SP);
-
-    if (ret != IM_STATUS_SUCCESS) {
-        std::cerr << "[WARN][RGA] imcvtcolor RGB888->NV12 failed: "
-                  << imStrError(ret) << ", fallback to CPU rgbToNv12\n";
-        cpuRgbToNv12(rgb, width, height, nv12);
-        return true;
-    }
-
-    return true;
-#else
-    static bool warned = false;
-    if (!warned) {
-        std::cerr << "[WARN][RGA] RGA headers not found at compile time, "
-                  << "using CPU rgbToNv12 fallback\n";
-        warned = true;
-    }
-    cpuRgbToNv12(rgb, width, height, nv12);
-    return true;
-#endif
 }
 
 bool pushNv12Frame(GstElement* appsrc,
@@ -739,7 +655,6 @@ int main(int argc, char** argv) {
               << " max_visible_weight=" << (1.0 - opt.alpha)
               << " initial_composite_alpha=" << opt.alpha
               << " output=NV12 " << opt.visibleWidth << "x" << opt.visibleHeight
-              << " rgb_to_nv12=" << (TRI_FUSION_HAS_RGA ? "RGA(im2d)" : "CPU fallback(no RGA header)")
               << " -> mpph264enc -> udp " << opt.host << ":" << opt.port << "\n";
     std::cerr << "[CONFIG] light_state thresholds: "
               << "NIGHT(mean<25,dark>0.75,stable>=3s), "
@@ -847,18 +762,9 @@ int main(int argc, char** argv) {
             std::cerr << "[ERROR][FUSION] failed to fuse RGB frames\n";
             break;
         }
+
         std::vector<std::uint8_t> fusedNv12;
-        if (!rgaRgbToNv12(fusedRgb, visible.width, visible.height, &fusedNv12)) {
-            std::cerr << "[WARN][RGA] failed to convert fused RGB to NV12, "
-                      << "fallback to CPU rgbToNv12\n";
-
-            cpuRgbToNv12(fusedRgb, visible.width, visible.height, &fusedNv12);
-
-            if (fusedNv12.empty()) {
-                std::cerr << "[ERROR][CPU] fallback rgbToNv12 also failed\n";
-                break;
-            }
-        }
+        rgbToNv12(fusedRgb, visible.width, visible.height, &fusedNv12);
 
         const GstClockTime pts = frameIndex * frameDuration;
         if (!pushNv12Frame(fusionSrc, fusedNv12, pts, frameDuration)) {
