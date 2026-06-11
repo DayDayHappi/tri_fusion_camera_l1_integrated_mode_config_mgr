@@ -39,6 +39,7 @@ public:
     foundation::Result<CompositeSensorOutputMode> getFusionMode();
     foundation::Result<void> setFusionColor(FusionColor color);
     foundation::Result<void> setInfraredPolarity(InfraredPolarity polarity);
+    foundation::Result<void> setContourMode(ContourMode mode);
     foundation::Result<void> triggerInfraredCorrection();
     foundation::Result<void> setInfraredBrightness(std::uint16_t value);
     foundation::Result<void> setInfraredContrast(std::uint16_t value);

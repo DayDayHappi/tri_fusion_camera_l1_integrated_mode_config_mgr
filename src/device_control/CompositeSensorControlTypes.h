@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace tri::device_control {
 
@@ -39,6 +40,7 @@ enum class CompositeSensorRegister : std::uint16_t {
     LowlightContrast = 0x6518,
     InfraredBrightness = 0x651C,
     InfraredContrast = 0x6520,
+    ContourMode = 0x652C,
     InfraredRegistrationZoom = 0x6730,
     InfraredRegistrationOffsetX = 0x6732,
     InfraredRegistrationOffsetY = 0x6734,
@@ -55,6 +57,7 @@ enum class FusionColor : std::uint16_t {
     Ocean = 4,
     City = 5,
     Desert = 6,
+    Default = 7,
 };
 
 enum class InfraredPolarity : std::uint16_t {
@@ -62,9 +65,23 @@ enum class InfraredPolarity : std::uint16_t {
     BlackHot = 1,
 };
 
+enum class ContourMode : std::uint16_t {
+    Off = 0,
+    Red = 1,
+    Green = 2,
+    Blue = 3,
+    Purple = 4,
+};
+
 enum class SaveConfigAction : std::uint16_t {
     SaveCurrent = 1,
     RestoreDefault = 2,
+};
+
+struct CompositeRegisterDescriptor {
+    const char* name;
+    CompositeSensorRegister reg;
+    std::uint16_t address;
 };
 
 struct CompositeSensorAck {
@@ -84,5 +101,17 @@ std::uint16_t outputModeRegisterValue(CompositeSensorOutputMode mode);
 CompositeSensorOutputMode outputModeFromRegisterValue(std::uint16_t value);
 std::string toString(CompositeSensorStatusWord status);
 bool isExecutable(CompositeSensorStatusWord status) noexcept;
+
+std::string fusionColorToName(FusionColor color);
+bool fusionColorFromCommandName(const std::string& name, FusionColor* color);
+
+std::string infraredPolarityToName(InfraredPolarity polarity);
+bool infraredPolarityFromCommandName(const std::string& name, InfraredPolarity* polarity);
+
+std::string contourModeToName(ContourMode mode);
+bool contourModeFromCommandName(const std::string& name, ContourMode* mode);
+
+const std::vector<CompositeRegisterDescriptor>& allCompositeRegisterDescriptors();
+const std::vector<CompositeRegisterDescriptor>& keyCompositeConfigRegisterDescriptors();
 
 } // namespace tri::device_control

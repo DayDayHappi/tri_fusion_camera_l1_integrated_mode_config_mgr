@@ -35,7 +35,24 @@ struct PrivateControlResult {
     std::string currentMode;
 };
 
+struct PrivateHttpResult {
+    bool ok{false};
+    int statusCode{200};
+    std::string statusText{"OK"};
+    std::string bodyJson;
+};
+
 using ModeSwitchCallback = std::function<PrivateControlResult(PrivateWorkMode)>;
+
+struct CompositeControlCallbacks {
+    std::function<PrivateHttpResult(const std::string& color)> setFusionColor;
+    std::function<PrivateHttpResult(const std::string& contour)> setContour;
+    std::function<PrivateHttpResult(const std::string& polarity)> setInfraredPolarity;
+    std::function<PrivateHttpResult()> queryConfig;
+    std::function<PrivateHttpResult()> readAllRegisters;
+    // Must return a JSON object string, e.g. {"source":"cached",...}
+    std::function<std::string()> currentCompositeStatusJson;
+};
 
 class PrivateControlServer {
 public:
@@ -46,6 +63,9 @@ public:
     PrivateControlServer& operator=(const PrivateControlServer&) = delete;
 
     bool start(const PrivateControlServerConfig& config, ModeSwitchCallback callback);
+    bool start(const PrivateControlServerConfig& config,
+               ModeSwitchCallback callback,
+               const CompositeControlCallbacks& compositeCallbacks);
     void stop();
     bool isRunning() const;
 
@@ -57,16 +77,23 @@ private:
 
     std::string handleHttpRequest(const std::string& request);
     std::string handleModeRequest(const std::string& method, const std::string& modeName);
+    std::string handleCompositeRequest(const std::string& method, const std::string& path);
     std::string handleStatusRequest();
 
     static std::string parseMethod(const std::string& request);
     static std::string parsePath(const std::string& request);
     static std::string httpJson(int statusCode, const std::string& statusText, const std::string& jsonBody);
     static std::string jsonEscape(const std::string& text);
+    static std::string invokeCompositeCallback(const std::function<PrivateHttpResult()>& callback,
+                                               const std::string& missingMessage);
+    static std::string invokeCompositeValueCallback(const std::function<PrivateHttpResult(const std::string&)>& callback,
+                                                    const std::string& value,
+                                                    const std::string& missingMessage);
 
 private:
     PrivateControlServerConfig config_{};
     ModeSwitchCallback callback_{};
+    CompositeControlCallbacks compositeCallbacks_{};
 
     std::atomic_bool running_{false};
     std::thread serverThread_;

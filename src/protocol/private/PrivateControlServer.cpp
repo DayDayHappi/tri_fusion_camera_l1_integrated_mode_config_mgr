@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cstring>
 #include <iostream>
+#include <exception>
 #include <netinet/in.h>
 #include <sstream>
 #include <sys/socket.h>
@@ -21,6 +22,11 @@ void closeFd(int* fd) {
         *fd = -1;
     }
 }
+
+bool methodAllowedForControl(const std::string& method) {
+    return method == "POST" || method == "GET";
+}
+
 
 } // namespace
 
@@ -80,6 +86,12 @@ PrivateControlServer::PrivateControlServer() = default;
 PrivateControlServer::~PrivateControlServer() { stop(); }
 
 bool PrivateControlServer::start(const PrivateControlServerConfig& config, ModeSwitchCallback callback) {
+    return start(config, std::move(callback), CompositeControlCallbacks{});
+}
+
+bool PrivateControlServer::start(const PrivateControlServerConfig& config,
+                                 ModeSwitchCallback callback,
+                                 const CompositeControlCallbacks& compositeCallbacks) {
     if (running_.load()) {
         std::lock_guard<std::mutex> lock(mutex_);
         lastError_ = "private control server already running";
@@ -93,6 +105,7 @@ bool PrivateControlServer::start(const PrivateControlServerConfig& config, ModeS
 
     config_ = config;
     callback_ = std::move(callback);
+    compositeCallbacks_ = compositeCallbacks;
 
     listenFd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listenFd_ < 0) {
@@ -198,13 +211,18 @@ std::string PrivateControlServer::handleHttpRequest(const std::string& request) 
         return handleStatusRequest();
     }
 
-    constexpr const char* prefix = "/api/v1/mode/";
-    if (path.rfind(prefix, 0) == 0) {
-        return handleModeRequest(method, path.substr(std::strlen(prefix)));
+    constexpr const char* modePrefix = "/api/v1/mode/";
+    if (path.rfind(modePrefix, 0) == 0) {
+        return handleModeRequest(method, path.substr(std::strlen(modePrefix)));
+    }
+
+    constexpr const char* compositePrefix = "/api/v1/composite/";
+    if (path.rfind(compositePrefix, 0) == 0) {
+        return handleCompositeRequest(method, path.substr(std::strlen(compositePrefix)));
     }
 
     return httpJson(404, "Not Found",
-        "{\"ok\":false,\"error\":\"unknown api\",\"usage\":\"POST /api/v1/mode/{visible|lowlight|thermal|lowlight_thermal|visible_lowlight|visible_thermal|visible_composite}\"}");
+        "{\"ok\":false,\"error\":\"unknown api\",\"usage\":\"/api/v1/mode/{mode}, /api/v1/composite/fusion_color/{value}, /api/v1/composite/contour/{value}, /api/v1/composite/infrared_polarity/{value}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers\"}");
 }
 
 std::string PrivateControlServer::handleModeRequest(const std::string& method,
@@ -239,14 +257,66 @@ std::string PrivateControlServer::handleModeRequest(const std::string& method,
     return httpJson(result.ok ? 200 : 500, result.ok ? "OK" : "Internal Server Error", body.str());
 }
 
+std::string PrivateControlServer::handleCompositeRequest(const std::string& method,
+                                                         const std::string& path) {
+    if (!methodAllowedForControl(method)) {
+        return httpJson(405, "Method Not Allowed", "{\"ok\":false,\"error\":\"method must be POST or GET\"}");
+    }
+
+    const std::string queryConfig = "query_config";
+    const std::string readAllRegisters = "read_all_registers";
+    const std::string legacyConfig = "config";
+    if (path == queryConfig || path == legacyConfig) {
+        return invokeCompositeCallback(compositeCallbacks_.queryConfig,
+                                       "query_config callback is not installed");
+    }
+    if (path == readAllRegisters) {
+        return invokeCompositeCallback(compositeCallbacks_.readAllRegisters,
+                                       "read_all_registers callback is not installed");
+    }
+
+    constexpr const char* fusionPrefix = "fusion_color/";
+    if (path.rfind(fusionPrefix, 0) == 0) {
+        return invokeCompositeValueCallback(compositeCallbacks_.setFusionColor,
+                                            path.substr(std::strlen(fusionPrefix)),
+                                            "fusion_color callback is not installed");
+    }
+
+    constexpr const char* contourPrefix = "contour/";
+    if (path.rfind(contourPrefix, 0) == 0) {
+        return invokeCompositeValueCallback(compositeCallbacks_.setContour,
+                                            path.substr(std::strlen(contourPrefix)),
+                                            "contour callback is not installed");
+    }
+
+    constexpr const char* polarityPrefix = "infrared_polarity/";
+    if (path.rfind(polarityPrefix, 0) == 0) {
+        return invokeCompositeValueCallback(compositeCallbacks_.setInfraredPolarity,
+                                            path.substr(std::strlen(polarityPrefix)),
+                                            "infrared_polarity callback is not installed");
+    }
+
+    return httpJson(404, "Not Found",
+        "{\"ok\":false,\"error\":\"unknown composite api\",\"usage\":\"/api/v1/composite/fusion_color/{black_white|forest|snow|ocean|city|desert|default|7}, /api/v1/composite/contour/{off|red|green|blue|purple}, /api/v1/composite/infrared_polarity/{white_hot|black_hot}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers\"}");
+}
+
 std::string PrivateControlServer::handleStatusRequest() {
     std::ostringstream body;
     body << "{"
          << "\"ok\":true,"
          << "\"server\":\"private_control\","
          << "\"control_port\":" << config_.port << ","
-         << "\"current_mode\":\"" << jsonEscape(toString(currentMode_)) << "\","
-         << "\"commands\":{"
+         << "\"current_mode\":\"" << jsonEscape(toCommandName(currentMode_)) << "\","
+         << "\"current_mode_verbose\":\"" << jsonEscape(toString(currentMode_)) << "\"";
+
+    if (compositeCallbacks_.currentCompositeStatusJson) {
+        const std::string status = compositeCallbacks_.currentCompositeStatusJson();
+        if (!status.empty()) {
+            body << ",\"current_composite\":" << status;
+        }
+    }
+
+    body << ",\"commands\":{"
          << "\"1\":\"/api/v1/mode/visible\","
          << "\"2\":\"/api/v1/mode/lowlight\","
          << "\"3\":\"/api/v1/mode/thermal\","
@@ -254,7 +324,14 @@ std::string PrivateControlServer::handleStatusRequest() {
          << "\"5\":\"/api/v1/mode/visible_lowlight\","
          << "\"6\":\"/api/v1/mode/visible_thermal\","
          << "\"7\":\"/api/v1/mode/visible_composite\""
-         << "}"
+         << "},"
+         << "\"composite_api\":["
+         << "\"/api/v1/composite/fusion_color/{black_white|forest|snow|ocean|city|desert|default|7}\","
+         << "\"/api/v1/composite/contour/{off|red|green|blue|purple}\","
+         << "\"/api/v1/composite/infrared_polarity/{white_hot|black_hot}\","
+         << "\"/api/v1/composite/query_config\","
+         << "\"/api/v1/composite/read_all_registers\""
+         << "]"
          << "}";
     return httpJson(200, "OK", body.str());
 }
@@ -300,6 +377,47 @@ std::string PrivateControlServer::jsonEscape(const std::string& text) {
         }
     }
     return out;
+}
+
+std::string PrivateControlServer::invokeCompositeCallback(
+    const std::function<PrivateHttpResult()>& callback,
+    const std::string& missingMessage) {
+    if (!callback) {
+        std::ostringstream body;
+        body << "{\"ok\":false,\"error\":\"" << jsonEscape(missingMessage) << "\"}";
+        return httpJson(200, "OK", body.str());
+    }
+    try {
+        const auto ret = callback();
+        return httpJson(ret.statusCode, ret.statusText, ret.bodyJson.empty() ? "{\"ok\":false,\"error\":\"empty callback response\"}" : ret.bodyJson);
+    } catch (const std::exception& e) {
+        std::ostringstream body;
+        body << "{\"ok\":false,\"error\":\"composite callback exception: " << jsonEscape(e.what()) << "\"}";
+        return httpJson(200, "OK", body.str());
+    } catch (...) {
+        return httpJson(200, "OK", "{\"ok\":false,\"error\":\"composite callback unknown exception\"}");
+    }
+}
+
+std::string PrivateControlServer::invokeCompositeValueCallback(
+    const std::function<PrivateHttpResult(const std::string&)>& callback,
+    const std::string& value,
+    const std::string& missingMessage) {
+    if (!callback) {
+        std::ostringstream body;
+        body << "{\"ok\":false,\"error\":\"" << jsonEscape(missingMessage) << "\"}";
+        return httpJson(200, "OK", body.str());
+    }
+    try {
+        const auto ret = callback(value);
+        return httpJson(ret.statusCode, ret.statusText, ret.bodyJson.empty() ? "{\"ok\":false,\"error\":\"empty callback response\"}" : ret.bodyJson);
+    } catch (const std::exception& e) {
+        std::ostringstream body;
+        body << "{\"ok\":false,\"error\":\"composite callback exception: " << jsonEscape(e.what()) << "\"}";
+        return httpJson(200, "OK", body.str());
+    } catch (...) {
+        return httpJson(200, "OK", "{\"ok\":false,\"error\":\"composite callback unknown exception\"}");
+    }
 }
 
 } // namespace tri::protocol::private_api

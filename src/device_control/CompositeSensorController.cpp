@@ -190,6 +190,10 @@ Result<void> CompositeSensorController::setInfraredPolarity(InfraredPolarity pol
     return writeRegister(CompositeSensorRegister::InfraredPolarity, static_cast<std::uint16_t>(polarity));
 }
 
+Result<void> CompositeSensorController::setContourMode(ContourMode mode) {
+    return writeRegister(CompositeSensorRegister::ContourMode, static_cast<std::uint16_t>(mode));
+}
+
 Result<void> CompositeSensorController::triggerInfraredCorrection() {
     return writeRegister(CompositeSensorRegister::InfraredCorrection, 1);
 }

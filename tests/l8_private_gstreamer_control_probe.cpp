@@ -9,12 +9,14 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <signal.h>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -22,6 +24,50 @@ std::atomic_bool gStopRequested{false};
 
 void onSignal(int) {
     gStopRequested.store(true);
+}
+
+std::string jsonEscape(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    for (char c : text) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '"': out += "\\\""; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default: out.push_back(c); break;
+        }
+    }
+    return out;
+}
+
+std::string hex16(std::uint16_t value) {
+    std::ostringstream oss;
+    oss << "0x" << std::uppercase << std::hex << std::setw(4) << std::setfill('0') << value;
+    return oss.str();
+}
+
+tri::protocol::private_api::PrivateHttpResult jsonResult(const std::string& body,
+                                                         bool ok,
+                                                         int statusCode = 200,
+                                                         const std::string& statusText = "OK") {
+    tri::protocol::private_api::PrivateHttpResult result;
+    result.ok = ok;
+    result.statusCode = statusCode;
+    result.statusText = statusText;
+    result.bodyJson = body;
+    return result;
+}
+
+tri::protocol::private_api::PrivateHttpResult errorJson(const std::string& action,
+                                                        const std::string& error,
+                                                        int statusCode = 200) {
+    std::ostringstream body;
+    body << "{\"ok\":false";
+    if (!action.empty()) body << ",\"action\":\"" << jsonEscape(action) << "\"";
+    body << ",\"error\":\"" << jsonEscape(error) << "\"}";
+    return jsonResult(body.str(), false, statusCode, statusCode == 200 ? "OK" : "Error");
 }
 
 void printUsage(const char* program) {
@@ -52,14 +98,12 @@ void printUsage(const char* program) {
         << "Compatibility options:\n"
         << "  --device PATH             same as --composite-device\n"
         << "  --width/--height/--fps/--format/--io-mode/--encoder are ignored\n\n"
-        << "Modes:\n"
-        << "  /api/v1/mode/visible\n"
-        << "  /api/v1/mode/lowlight\n"
-        << "  /api/v1/mode/thermal\n"
-        << "  /api/v1/mode/lowlight_thermal\n"
-        << "  /api/v1/mode/visible_lowlight\n"
-        << "  /api/v1/mode/visible_thermal\n"
-        << "  /api/v1/mode/visible_composite\n";
+        << "Composite parameter APIs:\n"
+        << "  /api/v1/composite/fusion_color/{black_white|forest|snow|ocean|city|desert|default}\n"
+        << "  /api/v1/composite/contour/{off|red|green|blue|purple}\n"
+        << "  /api/v1/composite/infrared_polarity/{white_hot|black_hot}\n"
+        << "  /api/v1/composite/query_config\n"
+        << "  /api/v1/composite/read_all_registers\n";
 }
 
 bool readValue(int& i, int argc, char** argv, std::string* out) {
@@ -98,23 +142,19 @@ bool mapPrivateModeToCompositeOutput(
             *needCompositeSwitch = false;
             *outputMode = CompositeSensorOutputMode::Unknown;
             return true;
-
         case PrivateWorkMode::LowlightOnly:
         case PrivateWorkMode::VisibleLowlightFusion:
             *outputMode = CompositeSensorOutputMode::LowlightOnly;
             return true;
-
         case PrivateWorkMode::ThermalOnly:
         case PrivateWorkMode::VisibleThermalFusion:
             *outputMode = CompositeSensorOutputMode::ThermalOnly;
             return true;
-
         case PrivateWorkMode::LowlightThermalComposite:
         case PrivateWorkMode::VisibleCompositeFusion:
             *outputMode = CompositeSensorOutputMode::LowlightThermalComposite;
             return true;
     }
-
     return false;
 }
 
@@ -196,17 +236,39 @@ bool parseArgs(int argc,
     return true;
 }
 
+struct CachedCompositeStatus {
+    std::string fusionColor{"unknown"};
+    std::string contour{"unknown"};
+    std::string infraredPolarity{"unknown"};
+};
+
+std::string cachedCompositeStatusJson(const CachedCompositeStatus& status) {
+    std::ostringstream body;
+    body << "{"
+         << "\"source\":\"cached\","
+         << "\"fusion_color\":\"" << jsonEscape(status.fusionColor) << "\","
+         << "\"contour\":\"" << jsonEscape(status.contour) << "\","
+         << "\"infrared_polarity\":\"" << jsonEscape(status.infraredPolarity) << "\""
+         << "}";
+    return body.str();
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     using tri::device_control::CompositeSensorController;
     using tri::device_control::CompositeSensorOutputMode;
+    using tri::device_control::ContourMode;
+    using tri::device_control::FusionColor;
+    using tri::device_control::InfraredPolarity;
     using tri::media::gstreamer::GStreamerConfigManagerOptions;
     using tri::media::gstreamer::GStreamerPipelineConfigManager;
     using tri::mode::PrivateVideoRuntime;
+    using tri::protocol::private_api::CompositeControlCallbacks;
     using tri::protocol::private_api::PrivateControlResult;
     using tri::protocol::private_api::PrivateControlServer;
     using tri::protocol::private_api::PrivateControlServerConfig;
+    using tri::protocol::private_api::PrivateHttpResult;
     using tri::protocol::private_api::PrivateWorkMode;
     using tri::protocol::private_api::toCommandName;
     using tri::protocol::private_api::toString;
@@ -257,6 +319,10 @@ int main(int argc, char** argv) {
     }
 
     std::mutex runtimeMutex;
+    std::mutex serialMutex;
+    std::mutex statusMutex;
+    CachedCompositeStatus cachedComposite;
+
     PrivateWorkMode currentMode = PrivateWorkMode::LowlightThermalComposite;
     PrivateVideoRuntime videoRuntime(gstConfigMgr);
     CompositeSensorController compositeController;
@@ -286,6 +352,7 @@ int main(int argc, char** argv) {
         bool needInitialCompositeSwitch = false;
         if (mapPrivateModeToCompositeOutput(currentMode, &initialCompositeMode, &needInitialCompositeSwitch) &&
             needInitialCompositeSwitch) {
+            std::lock_guard<std::mutex> serialLock(serialMutex);
             std::cout << "[SERIAL] initial composite output mode: "
                       << tri::device_control::toString(initialCompositeMode) << "\n";
             auto switchRet = compositeController.setOutputMode(initialCompositeMode);
@@ -342,11 +409,11 @@ int main(int argc, char** argv) {
         }
 
         if (serialEnabled && needCompositeSwitch) {
+            std::lock_guard<std::mutex> serialLock(serialMutex);
             std::cout << "[SERIAL] set composite output mode: "
                       << tri::device_control::toString(compositeMode) << "\n";
             auto switchRet = compositeController.setOutputMode(compositeMode);
             if (!switchRet) {
-                // Best effort: try to restore previous video runtime.
                 videoRuntime.start(currentMode);
                 result.ok = false;
                 result.message = "serial setOutputMode failed: " + switchRet.status().describe();
@@ -377,9 +444,196 @@ int main(int argc, char** argv) {
         return result;
     };
 
-    // 当前工程的 PrivateControlServer 只有 start(config, ModeSwitchCallback) 这个接口，
-    // 不要传 composite parameter callback，否则会和当前头文件不兼容。
-    if (!server.start(controlCfg, switchCallback)) {
+    auto ensureSerialReady = [&]() -> PrivateHttpResult {
+        if (!serialEnabled) {
+            return errorJson("composite_control", "serial control is disabled by --no-serial");
+        }
+        if (!compositeController.isReady()) {
+            return errorJson("composite_control", "composite sensor controller is not ready");
+        }
+        return jsonResult("{\"ok\":true}", true);
+    };
+
+    auto makeSetResult = [](const std::string& action,
+                            const std::string& field,
+                            const std::string& valueName,
+                            std::uint16_t value,
+                            bool ok,
+                            const std::string& message) -> PrivateHttpResult {
+        std::ostringstream body;
+        body << "{"
+             << "\"ok\":" << (ok ? "true" : "false") << ","
+             << "\"action\":\"" << jsonEscape(action) << "\","
+             << "\"result\":\"" << (ok ? "succeeded" : "failed") << "\","
+             << "\"" << jsonEscape(field) << "\":\"" << jsonEscape(valueName) << "\","
+             << "\"value\":" << value << ","
+             << "\"message\":\"" << jsonEscape(message) << "\""
+             << "}";
+        return jsonResult(body.str(), ok);
+    };
+
+    CompositeControlCallbacks compositeCallbacks;
+
+    compositeCallbacks.setFusionColor = [&](const std::string& colorName) -> PrivateHttpResult {
+        FusionColor color{};
+        if (!tri::device_control::fusionColorFromCommandName(colorName, &color)) {
+            return errorJson("set_fusion_color", "unsupported fusion_color: " + colorName + "; supported: black_white, forest, snow, ocean, city, desert, default");
+        }
+        auto ready = ensureSerialReady();
+        if (!ready.ok) return ready;
+
+        const auto value = static_cast<std::uint16_t>(color);
+        {
+            std::lock_guard<std::mutex> serialLock(serialMutex);
+            auto ret = compositeController.setFusionColor(color);
+            if (!ret) {
+                return makeSetResult("set_fusion_color", "fusion_color", colorName, value, false,
+                                     "failed: " + ret.status().describe());
+            }
+        }
+        const std::string canonical = tri::device_control::fusionColorToName(color);
+        {
+            std::lock_guard<std::mutex> statusLock(statusMutex);
+            cachedComposite.fusionColor = canonical;
+        }
+        return makeSetResult("set_fusion_color", "fusion_color", canonical, value, true,
+                             "fusion color updated");
+    };
+
+    compositeCallbacks.setContour = [&](const std::string& contourName) -> PrivateHttpResult {
+        ContourMode contour{};
+        if (!tri::device_control::contourModeFromCommandName(contourName, &contour)) {
+            return errorJson("set_contour", "unsupported contour: " + contourName + "; supported: off, red, green, blue, purple");
+        }
+        auto ready = ensureSerialReady();
+        if (!ready.ok) return ready;
+
+        const auto value = static_cast<std::uint16_t>(contour);
+        {
+            std::lock_guard<std::mutex> serialLock(serialMutex);
+            auto ret = compositeController.setContourMode(contour);
+            if (!ret) {
+                return makeSetResult("set_contour", "contour", contourName, value, false,
+                                     "failed: " + ret.status().describe());
+            }
+        }
+        const std::string canonical = tri::device_control::contourModeToName(contour);
+        {
+            std::lock_guard<std::mutex> statusLock(statusMutex);
+            cachedComposite.contour = canonical;
+        }
+        return makeSetResult("set_contour", "contour", canonical, value, true,
+                             "contour updated");
+    };
+
+    compositeCallbacks.setInfraredPolarity = [&](const std::string& polarityName) -> PrivateHttpResult {
+        InfraredPolarity polarity{};
+        if (!tri::device_control::infraredPolarityFromCommandName(polarityName, &polarity)) {
+            return errorJson("set_infrared_polarity", "unsupported infrared_polarity: " + polarityName + "; supported: white_hot, black_hot");
+        }
+        auto ready = ensureSerialReady();
+        if (!ready.ok) return ready;
+
+        const auto value = static_cast<std::uint16_t>(polarity);
+        {
+            std::lock_guard<std::mutex> serialLock(serialMutex);
+            auto ret = compositeController.setInfraredPolarity(polarity);
+            if (!ret) {
+                return makeSetResult("set_infrared_polarity", "infrared_polarity", polarityName, value, false,
+                                     "failed: " + ret.status().describe());
+            }
+        }
+        const std::string canonical = tri::device_control::infraredPolarityToName(polarity);
+        {
+            std::lock_guard<std::mutex> statusLock(statusMutex);
+            cachedComposite.infraredPolarity = canonical;
+        }
+        return makeSetResult("set_infrared_polarity", "infrared_polarity", canonical, value, true,
+                             "infrared polarity updated");
+    };
+
+    auto readDescriptorList = [&](const std::string& action,
+                                  const std::vector<tri::device_control::CompositeRegisterDescriptor>& descriptors,
+                                  bool stopOnFirstFailure) -> PrivateHttpResult {
+        auto ready = ensureSerialReady();
+        if (!ready.ok) return ready;
+
+        std::ostringstream entries;
+        std::ostringstream objectConfig;
+        int success = 0;
+        int failed = 0;
+        bool firstEntry = true;
+        bool firstObject = true;
+        std::string firstError;
+
+        std::lock_guard<std::mutex> serialLock(serialMutex);
+        for (const auto& desc : descriptors) {
+            auto ret = compositeController.readRegister(desc.reg);
+            if (!firstEntry) entries << ",";
+            firstEntry = false;
+
+            entries << "{\"name\":\"" << jsonEscape(desc.name) << "\","
+                    << "\"address\":\"" << hex16(desc.address) << "\",";
+            if (ret) {
+                ++success;
+                entries << "\"value\":" << ret.value() << ",\"ok\":true}";
+                if (!firstObject) objectConfig << ",";
+                firstObject = false;
+                objectConfig << "\"" << jsonEscape(desc.name) << "\":{"
+                             << "\"register\":\"" << hex16(desc.address) << "\","
+                             << "\"value\":" << ret.value()
+                             << "}";
+            } else {
+                ++failed;
+                const std::string err = ret.status().describe();
+                if (firstError.empty()) firstError = std::string("failed to read register ") + desc.name + ": " + err;
+                entries << "\"value\":null,\"ok\":false,\"error\":\"" << jsonEscape(err) << "\"}";
+                if (stopOnFirstFailure) break;
+            }
+        }
+
+        if (action == "query_config") {
+            std::ostringstream body;
+            body << "{\"ok\":" << (failed == 0 ? "true" : "false")
+                 << ",\"action\":\"query_config\"";
+            if (failed != 0) {
+                body << ",\"error\":\"" << jsonEscape(firstError) << "\""
+                     << ",\"partial_config\":{" << objectConfig.str() << "}";
+            } else {
+                body << ",\"config\":{" << objectConfig.str() << "}";
+            }
+            body << "}";
+            return jsonResult(body.str(), failed == 0);
+        }
+
+        std::ostringstream body;
+        body << "{\"ok\":" << (failed == 0 ? "true" : "false")
+             << ",\"action\":\"read_all_registers\""
+             << ",\"total\":" << (success + failed)
+             << ",\"success\":" << success
+             << ",\"failed\":" << failed
+             << ",\"registers\":[" << entries.str() << "]} ";
+        return jsonResult(body.str(), failed == 0);
+    };
+
+    compositeCallbacks.queryConfig = [&]() -> PrivateHttpResult {
+        return readDescriptorList("query_config",
+                                  tri::device_control::keyCompositeConfigRegisterDescriptors(),
+                                  true);
+    };
+
+    compositeCallbacks.readAllRegisters = [&]() -> PrivateHttpResult {
+        return readDescriptorList("read_all_registers",
+                                  tri::device_control::allCompositeRegisterDescriptors(),
+                                  false);
+    };
+
+    compositeCallbacks.currentCompositeStatusJson = [&]() -> std::string {
+        std::lock_guard<std::mutex> statusLock(statusMutex);
+        return cachedCompositeStatusJson(cachedComposite);
+    };
+
+    if (!server.start(controlCfg, switchCallback, compositeCallbacks)) {
         std::cerr << "[ERROR] failed to start private control server: " << server.lastError() << "\n";
         videoRuntime.stop();
         compositeController.shutdown();
