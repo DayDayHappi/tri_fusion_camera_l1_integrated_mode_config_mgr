@@ -563,7 +563,16 @@ if(TRI_FUSION_BUILD_TESTS)
     add_executable(l8_private_gstreamer_control_probe
         tests/l8_private_gstreamer_control_probe.cpp
     )
-
+    # Debug 构建自动追加 _debug 后缀。
+# Debug:
+#   l8_private_gstreamer_control_probe_debug
+# Release/其他:
+#   l8_private_gstreamer_control_probe
+set_target_properties(
+    l8_private_gstreamer_control_probe
+    PROPERTIES
+        DEBUG_POSTFIX "_debug"
+)
     target_include_directories(l8_private_gstreamer_control_probe
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src
