@@ -2,7 +2,7 @@ camera:
   visible:
     enable: true
     name: "visible_camera"
-    video_node: "/dev/video3"
+    video_node: "/dev/tri_visible_video"
     width: 640
     height: 480
     fps: 30
@@ -11,7 +11,7 @@ camera:
   composite_low_thermal:
     enable: true
     name: "composite_low_thermal_camera"
-    video_node: "/dev/video1"
+    video_node: "/dev/tri_composite_video"
     metadata_node: "/dev/tri_composite_meta"
     width: 800
     height: 600
