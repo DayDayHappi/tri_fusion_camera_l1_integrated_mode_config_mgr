@@ -182,6 +182,65 @@ Result<void> CompositeSensorController::writeRegister(std::uint16_t address, std
     return Result<void>::success();
 }
 
+Result<std::uint16_t>
+CompositeSensorController::writeRegisterVerified(
+    CompositeSensorRegister reg,
+    std::uint16_t value) {
+    return writeRegisterVerified(
+        static_cast<std::uint16_t>(reg),
+        value);
+}
+
+Result<std::uint16_t>
+CompositeSensorController::writeRegisterVerified(
+    std::uint16_t address,
+    std::uint16_t value) {
+
+    // 第一步：发送写命令并等待写 ACK。
+    auto writeRet = writeRegister(address, value);
+    if (!writeRet) {
+        return Result<std::uint16_t>::error(
+            writeRet.status().code(),
+            writeRet.status().describe());
+    }
+
+    // 第二步：写成功 ACK 后，立即读取同一寄存器。
+    auto readRet = readRegister(address);
+    if (!readRet) {
+        return Result<std::uint16_t>::error(
+            readRet.status().code(),
+            "write ACK succeeded, but read-back failed: " +
+                readRet.status().describe());
+    }
+
+    const std::uint16_t actualValue = readRet.value();
+
+    // 第三步：比较回读值和目标值。
+    if (actualValue != value) {
+        std::ostringstream oss;
+        oss << "register verify failed: address=0x"
+            << std::hex << address
+            << ", expected=0x" << value
+            << ", actual=0x" << actualValue
+            << std::dec;
+
+        return Result<std::uint16_t>::error(
+            ErrorCode::IoError,
+            oss.str());
+    }
+
+    TRI_LOG_INFO(LogCategory::Serial)
+        << "verify composite sensor register addr=0x"
+        << std::hex << address
+        << ", expected=0x" << value
+        << ", actual=0x" << actualValue
+        << ", verified=true"
+        << std::dec;
+
+    state_.lastError.clear();
+    return Result<std::uint16_t>::ok(actualValue);
+}
+
 Result<void> CompositeSensorController::setFusionColor(FusionColor color) {
     return writeRegister(CompositeSensorRegister::FusionColor, static_cast<std::uint16_t>(color));
 }

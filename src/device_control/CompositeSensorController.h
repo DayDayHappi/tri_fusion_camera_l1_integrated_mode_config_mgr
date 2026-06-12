@@ -11,7 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
-
+#include <sstream>
 namespace tri::device_control {
 
 class CompositeSensorController final {
@@ -35,6 +35,13 @@ public:
     foundation::Result<std::uint16_t> readRegister(CompositeSensorRegister reg);
     foundation::Result<void> writeRegister(CompositeSensorRegister reg, std::uint16_t value);
 
+    foundation::Result<std::uint16_t> writeRegisterVerified(
+    std::uint16_t address,
+    std::uint16_t value);
+
+    foundation::Result<std::uint16_t> writeRegisterVerified(
+    CompositeSensorRegister reg,
+    std::uint16_t value);
     foundation::Result<void> setFusionMode(CompositeSensorOutputMode mode);
     foundation::Result<CompositeSensorOutputMode> getFusionMode();
     foundation::Result<void> setFusionColor(FusionColor color);

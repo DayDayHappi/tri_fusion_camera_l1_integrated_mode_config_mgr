@@ -56,6 +56,8 @@ struct CompositeControlCallbacks {
     std::function<PrivateHttpResult(const std::string& sensor,
                                     const std::string& direction,
                                     int step)> moveRegistrationOffset;
+    std::function<PrivateHttpResult(const std::string& sensor,
+                                    int value)> setRegistrationZoom;
     std::function<PrivateHttpResult()> queryRegistration;
     // Must return a JSON object string, e.g. {"source":"cached",...}
     std::function<std::string()> currentCompositeStatusJson;

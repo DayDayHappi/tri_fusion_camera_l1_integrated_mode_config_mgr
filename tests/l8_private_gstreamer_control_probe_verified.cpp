@@ -106,7 +106,6 @@ void printUsage(const char* program) {
         << "  /api/v1/composite/read_all_registers\n"
         << "  /api/v1/composite/registration\n"
         << "  /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}\n"
-        << "  /api/v1/composite/registration/{infrared|lowlight}/zoom/{value}\n"
         << "  /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\n";
 }
 
@@ -755,96 +754,32 @@ int main(int argc, char** argv) {
         return jsonResult(body.str(), true);
     };
 
-    compositeCallbacks.setRegistrationZoom =
-        [&](const std::string& sensor, int value) -> PrivateHttpResult {
-        CompositeSensorRegister reg{};
-        int minValue = 0;
-        int maxValue = 0;
-
-        if (sensor == "infrared") {
-            reg = CompositeSensorRegister::InfraredRegistrationZoom;
-            maxValue = 15;
-        } else if (sensor == "lowlight") {
-            reg = CompositeSensorRegister::LowlightRegistrationZoom;
-            maxValue = 10;
-        } else {
-            return errorJson("set_registration_zoom",
-                             "sensor must be infrared or lowlight");
-        }
-
-        if (value < minValue || value > maxValue) {
-            std::ostringstream error;
-            error << "value for " << sensor << " zoom must be in range "
-                  << minValue << ".." << maxValue;
-            return errorJson("set_registration_zoom", error.str());
-        }
-
-        auto ready = ensureSerialReady();
-        if (!ready.ok) return ready;
-
-        std::uint16_t actualRaw = 0;
-        {
-            std::lock_guard<std::mutex> serialLock(serialMutex);
-            auto writeRet = compositeController.writeRegisterVerified(
-                reg, static_cast<std::uint16_t>(value));
-            if (!writeRet) {
-                return errorJson("set_registration_zoom",
-                                 writeRet.status().describe());
-            }
-            actualRaw = writeRet.value();
-        }
-
-        std::ostringstream body;
-        body << "{\"ok\":true,\"action\":\"set_registration_zoom\""
-             << ",\"sensor\":\"" << jsonEscape(sensor) << "\""
-             << ",\"register\":\""
-             << hex16(static_cast<std::uint16_t>(reg)) << "\""
-             << ",\"requested_value\":" << value
-             << ",\"actual_value\":" << actualRaw
-             << ",\"verified\":true"
-             << ",\"message\":\"registration zoom updated and verified\"}";
-        return jsonResult(body.str(), true);
-    };
-
     compositeCallbacks.queryRegistration = [&]() -> PrivateHttpResult {
         auto ready = ensureSerialReady();
         if (!ready.ok) return ready;
 
-        std::uint16_t irZoomRaw = 0;
         std::uint16_t irXRaw = 0;
         std::uint16_t irYRaw = 0;
-        std::uint16_t lowZoomRaw = 0;
         std::uint16_t lowXRaw = 0;
         std::uint16_t lowYRaw = 0;
         {
             std::lock_guard<std::mutex> serialLock(serialMutex);
-            auto irZoom = compositeController.readRegister(CompositeSensorRegister::InfraredRegistrationZoom);
-            if (!irZoom) return errorJson("query_registration", irZoom.status().describe());
             auto irX = compositeController.readRegister(CompositeSensorRegister::InfraredRegistrationOffsetX);
             if (!irX) return errorJson("query_registration", irX.status().describe());
             auto irY = compositeController.readRegister(CompositeSensorRegister::InfraredRegistrationOffsetY);
             if (!irY) return errorJson("query_registration", irY.status().describe());
-            auto lowZoom = compositeController.readRegister(CompositeSensorRegister::LowlightRegistrationZoom);
-            if (!lowZoom) return errorJson("query_registration", lowZoom.status().describe());
             auto lowX = compositeController.readRegister(CompositeSensorRegister::LowlightRegistrationOffsetX);
             if (!lowX) return errorJson("query_registration", lowX.status().describe());
             auto lowY = compositeController.readRegister(CompositeSensorRegister::LowlightRegistrationOffsetY);
             if (!lowY) return errorJson("query_registration", lowY.status().describe());
-            irZoomRaw = irZoom.value();
-            irXRaw = irX.value();
-            irYRaw = irY.value();
-            lowZoomRaw = lowZoom.value();
-            lowXRaw = lowX.value();
-            lowYRaw = lowY.value();
+            irXRaw = irX.value(); irYRaw = irY.value(); lowXRaw = lowX.value(); lowYRaw = lowY.value();
         }
 
         std::ostringstream body;
         body << "{\"ok\":true,\"action\":\"query_registration\",\"registration\":{"
-             << "\"infrared\":{\"zoom\":" << irZoomRaw
-             << ",\"x\":" << static_cast<std::int16_t>(irXRaw)
+             << "\"infrared\":{\"x\":" << static_cast<std::int16_t>(irXRaw)
              << ",\"y\":" << static_cast<std::int16_t>(irYRaw) << "},"
-             << "\"lowlight\":{\"zoom\":" << lowZoomRaw
-             << ",\"x\":" << static_cast<std::int16_t>(lowXRaw)
+             << "\"lowlight\":{\"x\":" << static_cast<std::int16_t>(lowXRaw)
              << ",\"y\":" << static_cast<std::int16_t>(lowYRaw) << "}}}";
         return jsonResult(body.str(), true);
     };

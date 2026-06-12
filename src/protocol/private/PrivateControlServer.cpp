@@ -250,7 +250,7 @@ std::string PrivateControlServer::handleHttpRequest(const std::string& request) 
     }
 
     return httpJson(404, "Not Found",
-        "{\"ok\":false,\"error\":\"unknown api\",\"usage\":\"/api/v1/mode/{mode}, /api/v1/composite/fusion_color/{value}, /api/v1/composite/contour/{value}, /api/v1/composite/infrared_polarity/{value}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\"}");
+        "{\"ok\":false,\"error\":\"unknown api\",\"usage\":\"/api/v1/mode/{mode}, /api/v1/composite/fusion_color/{value}, /api/v1/composite/contour/{value}, /api/v1/composite/infrared_polarity/{value}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/zoom/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\"}");
 }
 
 std::string PrivateControlServer::handleModeRequest(const std::string& method,
@@ -338,6 +338,28 @@ std::string PrivateControlServer::handleCompositeRequest(const std::string& meth
             }
         }
 
+        // registration/{infrared|lowlight}/zoom/{value}
+        if (parts.size() == 3 && parts[1] == "zoom") {
+            int value = 0;
+            if (!parseStrictInt(parts[2], &value)) {
+                return httpJson(400, "Bad Request",
+                    "{\"ok\":false,\"action\":\"set_registration_zoom\",\"error\":\"invalid integer value\"}");
+            }
+            if (!compositeCallbacks_.setRegistrationZoom) {
+                return httpJson(200, "OK",
+                    "{\"ok\":false,\"error\":\"set_registration_zoom callback is not installed\"}");
+            }
+            try {
+                const auto ret = compositeCallbacks_.setRegistrationZoom(parts[0], value);
+                return httpJson(ret.statusCode, ret.statusText,
+                    ret.bodyJson.empty() ? "{\"ok\":false,\"error\":\"empty callback response\"}" : ret.bodyJson);
+            } catch (const std::exception& e) {
+                return httpJson(200, "OK",
+                    std::string("{\"ok\":false,\"error\":\"registration zoom callback exception: ") +
+                    jsonEscape(e.what()) + "\"}");
+            }
+        }
+
         // registration/{infrared|lowlight}/move/{left|right|up|down}/{positive_step}
         if (parts.size() == 4 && parts[1] == "move") {
             int step = 0;
@@ -361,7 +383,7 @@ std::string PrivateControlServer::handleCompositeRequest(const std::string& meth
         }
 
         return httpJson(400, "Bad Request",
-            "{\"ok\":false,\"error\":\"invalid registration path\",\"usage\":\"registration/{infrared|lowlight}/{x|y}/{value} or registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\"}");
+            "{\"ok\":false,\"error\":\"invalid registration path\",\"usage\":\"registration/{infrared|lowlight}/{x|y}/{value}, registration/{infrared|lowlight}/zoom/{value}, or registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\"}");
     }
 
     constexpr const char* fusionPrefix = "fusion_color/";
@@ -386,7 +408,7 @@ std::string PrivateControlServer::handleCompositeRequest(const std::string& meth
     }
 
     return httpJson(404, "Not Found",
-        "{\"ok\":false,\"error\":\"unknown composite api\",\"usage\":\"/api/v1/composite/fusion_color/{black_white|forest|snow|ocean|city|desert|default|7}, /api/v1/composite/contour/{off|red|green|blue|purple}, /api/v1/composite/infrared_polarity/{white_hot|black_hot}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\"}");
+        "{\"ok\":false,\"error\":\"unknown composite api\",\"usage\":\"/api/v1/composite/fusion_color/{black_white|forest|snow|ocean|city|desert|default|7}, /api/v1/composite/contour/{off|red|green|blue|purple}, /api/v1/composite/infrared_polarity/{white_hot|black_hot}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/zoom/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\"}");
 }
 
 std::string PrivateControlServer::handleStatusRequest() {
@@ -422,6 +444,7 @@ std::string PrivateControlServer::handleStatusRequest() {
          << "\"/api/v1/composite/read_all_registers\","
          << "\"/api/v1/composite/registration\","
          << "\"/api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}\","
+         << "\"/api/v1/composite/registration/{infrared|lowlight}/zoom/{value}\","
          << "\"/api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\""
          << "]"
          << "}";
