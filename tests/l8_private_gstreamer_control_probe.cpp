@@ -103,7 +103,10 @@ void printUsage(const char* program) {
         << "  /api/v1/composite/contour/{off|red|green|blue|purple}\n"
         << "  /api/v1/composite/infrared_polarity/{white_hot|black_hot}\n"
         << "  /api/v1/composite/query_config\n"
-        << "  /api/v1/composite/read_all_registers\n";
+        << "  /api/v1/composite/read_all_registers\n"
+        << "  /api/v1/composite/registration\n"
+        << "  /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}\n"
+        << "  /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\n";
 }
 
 bool readValue(int& i, int argc, char** argv, std::string* out) {
@@ -270,6 +273,8 @@ int main(int argc, char** argv) {
     using tri::protocol::private_api::PrivateControlServerConfig;
     using tri::protocol::private_api::PrivateHttpResult;
     using tri::protocol::private_api::PrivateWorkMode;
+    using tri::device_control::CompositeSensorRegister;
+    using tri::foundation::Result;
     using tri::protocol::private_api::toCommandName;
     using tri::protocol::private_api::toString;
 
@@ -477,7 +482,7 @@ int main(int argc, char** argv) {
     compositeCallbacks.setFusionColor = [&](const std::string& colorName) -> PrivateHttpResult {
         FusionColor color{};
         if (!tri::device_control::fusionColorFromCommandName(colorName, &color)) {
-            return errorJson("set_fusion_color", "unsupported fusion_color: " + colorName + "; supported: black_white, forest, snow, ocean, city, desert, default");
+            return errorJson("set_fusion_color", "unsupported fusion_color: " + colorName + "; supported: black_white, forest, snow, ocean, city, desert, default, 7");
         }
         auto ready = ensureSerialReady();
         if (!ready.ok) return ready;
@@ -614,6 +619,161 @@ int main(int argc, char** argv) {
              << ",\"failed\":" << failed
              << ",\"registers\":[" << entries.str() << "]} ";
         return jsonResult(body.str(), failed == 0);
+    };
+
+    auto registrationRegister = [](const std::string& sensor,
+                                   const std::string& axis,
+                                   CompositeSensorRegister* reg) -> bool {
+        if (reg == nullptr) return false;
+        if (sensor == "infrared" && axis == "x") {
+            *reg = CompositeSensorRegister::InfraredRegistrationOffsetX;
+            return true;
+        }
+        if (sensor == "infrared" && axis == "y") {
+            *reg = CompositeSensorRegister::InfraredRegistrationOffsetY;
+            return true;
+        }
+        if (sensor == "lowlight" && axis == "x") {
+            *reg = CompositeSensorRegister::LowlightRegistrationOffsetX;
+            return true;
+        }
+        if (sensor == "lowlight" && axis == "y") {
+            *reg = CompositeSensorRegister::LowlightRegistrationOffsetY;
+            return true;
+        }
+        return false;
+    };
+
+    auto setRegistrationValueLocked = [&](const std::string& sensor,
+                                          const std::string& axis,
+                                          std::int16_t value) -> Result<void> {
+        if (sensor == "infrared" && axis == "x") {
+            return compositeController.setInfraredRegistrationOffsetX(value);
+        }
+        if (sensor == "infrared" && axis == "y") {
+            return compositeController.setInfraredRegistrationOffsetY(value);
+        }
+        if (sensor == "lowlight" && axis == "x") {
+            return compositeController.setLowlightRegistrationOffsetX(value);
+        }
+        return compositeController.setLowlightRegistrationOffsetY(value);
+    };
+
+    compositeCallbacks.setRegistrationOffset =
+        [&](const std::string& sensor, const std::string& axis, int value) -> PrivateHttpResult {
+        CompositeSensorRegister reg{};
+        if (!registrationRegister(sensor, axis, &reg)) {
+            return errorJson("set_registration_offset",
+                             "sensor must be infrared or lowlight, axis must be x or y");
+        }
+        if (value < -32768 || value > 32767) {
+            return errorJson("set_registration_offset", "value must be in int16 range -32768..32767");
+        }
+        auto ready = ensureSerialReady();
+        if (!ready.ok) return ready;
+
+        const auto signedValue = static_cast<std::int16_t>(value);
+        {
+            std::lock_guard<std::mutex> serialLock(serialMutex);
+            auto ret = setRegistrationValueLocked(sensor, axis, signedValue);
+            if (!ret) {
+                return errorJson("set_registration_offset", ret.status().describe());
+            }
+        }
+
+        std::ostringstream body;
+        body << "{\"ok\":true,\"action\":\"set_registration_offset\""
+             << ",\"sensor\":\"" << jsonEscape(sensor) << "\""
+             << ",\"axis\":\"" << jsonEscape(axis) << "\""
+             << ",\"register\":\"" << hex16(static_cast<std::uint16_t>(reg)) << "\""
+             << ",\"value\":" << value
+             << ",\"raw_value\":" << static_cast<std::uint16_t>(signedValue)
+             << ",\"message\":\"registration offset updated\"}";
+        return jsonResult(body.str(), true);
+    };
+
+    compositeCallbacks.moveRegistrationOffset =
+        [&](const std::string& sensor, const std::string& direction, int step) -> PrivateHttpResult {
+        std::string axis;
+        int delta = 0;
+        if (direction == "left")  { axis = "x"; delta = -step; }
+        else if (direction == "right") { axis = "x"; delta = step; }
+        else if (direction == "up")    { axis = "y"; delta = -step; }
+        else if (direction == "down")  { axis = "y"; delta = step; }
+        else {
+            return errorJson("move_registration_offset",
+                             "direction must be left, right, up or down");
+        }
+
+        CompositeSensorRegister reg{};
+        if (!registrationRegister(sensor, axis, &reg)) {
+            return errorJson("move_registration_offset", "sensor must be infrared or lowlight");
+        }
+        auto ready = ensureSerialReady();
+        if (!ready.ok) return ready;
+
+        int oldValue = 0;
+        int newValue = 0;
+        {
+            std::lock_guard<std::mutex> serialLock(serialMutex);
+            auto readRet = compositeController.readRegister(reg);
+            if (!readRet) {
+                return errorJson("move_registration_offset",
+                                 "failed to read current offset: " + readRet.status().describe());
+            }
+            oldValue = static_cast<std::int16_t>(readRet.value());
+            newValue = oldValue + delta;
+            if (newValue < -32768 || newValue > 32767) {
+                return errorJson("move_registration_offset",
+                                 "new value exceeds int16 range -32768..32767");
+            }
+            auto writeRet = setRegistrationValueLocked(sensor, axis,
+                                                        static_cast<std::int16_t>(newValue));
+            if (!writeRet) {
+                return errorJson("move_registration_offset", writeRet.status().describe());
+            }
+        }
+
+        std::ostringstream body;
+        body << "{\"ok\":true,\"action\":\"move_registration_offset\""
+             << ",\"sensor\":\"" << jsonEscape(sensor) << "\""
+             << ",\"direction\":\"" << jsonEscape(direction) << "\""
+             << ",\"axis\":\"" << axis << "\""
+             << ",\"step\":" << step
+             << ",\"old_value\":" << oldValue
+             << ",\"new_value\":" << newValue
+             << ",\"register\":\"" << hex16(static_cast<std::uint16_t>(reg)) << "\"}";
+        return jsonResult(body.str(), true);
+    };
+
+    compositeCallbacks.queryRegistration = [&]() -> PrivateHttpResult {
+        auto ready = ensureSerialReady();
+        if (!ready.ok) return ready;
+
+        std::uint16_t irXRaw = 0;
+        std::uint16_t irYRaw = 0;
+        std::uint16_t lowXRaw = 0;
+        std::uint16_t lowYRaw = 0;
+        {
+            std::lock_guard<std::mutex> serialLock(serialMutex);
+            auto irX = compositeController.readRegister(CompositeSensorRegister::InfraredRegistrationOffsetX);
+            if (!irX) return errorJson("query_registration", irX.status().describe());
+            auto irY = compositeController.readRegister(CompositeSensorRegister::InfraredRegistrationOffsetY);
+            if (!irY) return errorJson("query_registration", irY.status().describe());
+            auto lowX = compositeController.readRegister(CompositeSensorRegister::LowlightRegistrationOffsetX);
+            if (!lowX) return errorJson("query_registration", lowX.status().describe());
+            auto lowY = compositeController.readRegister(CompositeSensorRegister::LowlightRegistrationOffsetY);
+            if (!lowY) return errorJson("query_registration", lowY.status().describe());
+            irXRaw = irX.value(); irYRaw = irY.value(); lowXRaw = lowX.value(); lowYRaw = lowY.value();
+        }
+
+        std::ostringstream body;
+        body << "{\"ok\":true,\"action\":\"query_registration\",\"registration\":{"
+             << "\"infrared\":{\"x\":" << static_cast<std::int16_t>(irXRaw)
+             << ",\"y\":" << static_cast<std::int16_t>(irYRaw) << "},"
+             << "\"lowlight\":{\"x\":" << static_cast<std::int16_t>(lowXRaw)
+             << ",\"y\":" << static_cast<std::int16_t>(lowYRaw) << "}}}";
+        return jsonResult(body.str(), true);
     };
 
     compositeCallbacks.queryConfig = [&]() -> PrivateHttpResult {

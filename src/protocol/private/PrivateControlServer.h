@@ -50,6 +50,13 @@ struct CompositeControlCallbacks {
     std::function<PrivateHttpResult(const std::string& polarity)> setInfraredPolarity;
     std::function<PrivateHttpResult()> queryConfig;
     std::function<PrivateHttpResult()> readAllRegisters;
+    std::function<PrivateHttpResult(const std::string& sensor,
+                                    const std::string& axis,
+                                    int value)> setRegistrationOffset;
+    std::function<PrivateHttpResult(const std::string& sensor,
+                                    const std::string& direction,
+                                    int step)> moveRegistrationOffset;
+    std::function<PrivateHttpResult()> queryRegistration;
     // Must return a JSON object string, e.g. {"source":"cached",...}
     std::function<std::string()> currentCompositeStatusJson;
 };

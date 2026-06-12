@@ -9,6 +9,7 @@
 #include <sstream>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <vector>
 
 namespace tri::protocol::private_api {
 
@@ -25,6 +26,33 @@ void closeFd(int* fd) {
 
 bool methodAllowedForControl(const std::string& method) {
     return method == "POST" || method == "GET";
+}
+
+std::vector<std::string> splitPath(const std::string& path) {
+    std::vector<std::string> parts;
+    std::size_t begin = 0;
+    while (begin <= path.size()) {
+        const std::size_t end = path.find('/', begin);
+        const std::string part = path.substr(begin,
+            end == std::string::npos ? std::string::npos : end - begin);
+        if (!part.empty()) parts.push_back(part);
+        if (end == std::string::npos) break;
+        begin = end + 1;
+    }
+    return parts;
+}
+
+bool parseStrictInt(const std::string& text, int* value) {
+    if (value == nullptr || text.empty()) return false;
+    try {
+        std::size_t consumed = 0;
+        const int parsed = std::stoi(text, &consumed, 10);
+        if (consumed != text.size()) return false;
+        *value = parsed;
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 
@@ -222,7 +250,7 @@ std::string PrivateControlServer::handleHttpRequest(const std::string& request) 
     }
 
     return httpJson(404, "Not Found",
-        "{\"ok\":false,\"error\":\"unknown api\",\"usage\":\"/api/v1/mode/{mode}, /api/v1/composite/fusion_color/{value}, /api/v1/composite/contour/{value}, /api/v1/composite/infrared_polarity/{value}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers\"}");
+        "{\"ok\":false,\"error\":\"unknown api\",\"usage\":\"/api/v1/mode/{mode}, /api/v1/composite/fusion_color/{value}, /api/v1/composite/contour/{value}, /api/v1/composite/infrared_polarity/{value}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\"}");
 }
 
 std::string PrivateControlServer::handleModeRequest(const std::string& method,
@@ -275,6 +303,67 @@ std::string PrivateControlServer::handleCompositeRequest(const std::string& meth
                                        "read_all_registers callback is not installed");
     }
 
+    if (path == "registration") {
+        return invokeCompositeCallback(compositeCallbacks_.queryRegistration,
+                                       "query_registration callback is not installed");
+    }
+
+    constexpr const char* registrationPrefix = "registration/";
+    if (path.rfind(registrationPrefix, 0) == 0) {
+        const auto parts = splitPath(path.substr(std::strlen(registrationPrefix)));
+
+        // registration/{infrared|lowlight}/{x|y}/{signed_value}
+        if (parts.size() == 3 && (parts[1] == "x" || parts[1] == "y")) {
+            int value = 0;
+            if (!parseStrictInt(parts[2], &value)) {
+                return httpJson(400, "Bad Request",
+                    "{\"ok\":false,\"action\":\"set_registration_offset\",\"error\":\"invalid integer value\"}");
+            }
+            if (value < -32768 || value > 32767) {
+                return httpJson(400, "Bad Request",
+                    "{\"ok\":false,\"action\":\"set_registration_offset\",\"error\":\"value must be in int16 range -32768..32767\"}");
+            }
+            if (!compositeCallbacks_.setRegistrationOffset) {
+                return httpJson(200, "OK",
+                    "{\"ok\":false,\"error\":\"set_registration_offset callback is not installed\"}");
+            }
+            try {
+                const auto ret = compositeCallbacks_.setRegistrationOffset(parts[0], parts[1], value);
+                return httpJson(ret.statusCode, ret.statusText,
+                    ret.bodyJson.empty() ? "{\"ok\":false,\"error\":\"empty callback response\"}" : ret.bodyJson);
+            } catch (const std::exception& e) {
+                return httpJson(200, "OK",
+                    std::string("{\"ok\":false,\"error\":\"registration callback exception: ") +
+                    jsonEscape(e.what()) + "\"}");
+            }
+        }
+
+        // registration/{infrared|lowlight}/move/{left|right|up|down}/{positive_step}
+        if (parts.size() == 4 && parts[1] == "move") {
+            int step = 0;
+            if (!parseStrictInt(parts[3], &step) || step <= 0 || step > 32767) {
+                return httpJson(400, "Bad Request",
+                    "{\"ok\":false,\"action\":\"move_registration_offset\",\"error\":\"step must be an integer in range 1..32767\"}");
+            }
+            if (!compositeCallbacks_.moveRegistrationOffset) {
+                return httpJson(200, "OK",
+                    "{\"ok\":false,\"error\":\"move_registration_offset callback is not installed\"}");
+            }
+            try {
+                const auto ret = compositeCallbacks_.moveRegistrationOffset(parts[0], parts[2], step);
+                return httpJson(ret.statusCode, ret.statusText,
+                    ret.bodyJson.empty() ? "{\"ok\":false,\"error\":\"empty callback response\"}" : ret.bodyJson);
+            } catch (const std::exception& e) {
+                return httpJson(200, "OK",
+                    std::string("{\"ok\":false,\"error\":\"registration callback exception: ") +
+                    jsonEscape(e.what()) + "\"}");
+            }
+        }
+
+        return httpJson(400, "Bad Request",
+            "{\"ok\":false,\"error\":\"invalid registration path\",\"usage\":\"registration/{infrared|lowlight}/{x|y}/{value} or registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\"}");
+    }
+
     constexpr const char* fusionPrefix = "fusion_color/";
     if (path.rfind(fusionPrefix, 0) == 0) {
         return invokeCompositeValueCallback(compositeCallbacks_.setFusionColor,
@@ -297,7 +386,7 @@ std::string PrivateControlServer::handleCompositeRequest(const std::string& meth
     }
 
     return httpJson(404, "Not Found",
-        "{\"ok\":false,\"error\":\"unknown composite api\",\"usage\":\"/api/v1/composite/fusion_color/{black_white|forest|snow|ocean|city|desert|default|7}, /api/v1/composite/contour/{off|red|green|blue|purple}, /api/v1/composite/infrared_polarity/{white_hot|black_hot}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers\"}");
+        "{\"ok\":false,\"error\":\"unknown composite api\",\"usage\":\"/api/v1/composite/fusion_color/{black_white|forest|snow|ocean|city|desert|default|7}, /api/v1/composite/contour/{off|red|green|blue|purple}, /api/v1/composite/infrared_polarity/{white_hot|black_hot}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\"}");
 }
 
 std::string PrivateControlServer::handleStatusRequest() {
@@ -330,7 +419,10 @@ std::string PrivateControlServer::handleStatusRequest() {
          << "\"/api/v1/composite/contour/{off|red|green|blue|purple}\","
          << "\"/api/v1/composite/infrared_polarity/{white_hot|black_hot}\","
          << "\"/api/v1/composite/query_config\","
-         << "\"/api/v1/composite/read_all_registers\""
+         << "\"/api/v1/composite/read_all_registers\","
+         << "\"/api/v1/composite/registration\","
+         << "\"/api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}\","
+         << "\"/api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\""
          << "]"
          << "}";
     return httpJson(200, "OK", body.str());
