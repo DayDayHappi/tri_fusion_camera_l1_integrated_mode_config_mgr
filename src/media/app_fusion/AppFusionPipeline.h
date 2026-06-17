@@ -20,6 +20,9 @@ struct AppFusionOptions {
     int fps{30};
 
     double compositeAlpha{0.35};
+    int visibleOffsetX{0};
+    int visibleOffsetY{0};
+    bool gpuBilinearResize{false};
     std::string convertElement{"videoconvert"};
     bool verbose{false};
 };

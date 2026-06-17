@@ -1,4 +1,5 @@
 #include "media/app_fusion/AppFusionPipeline.h"
+#include "media/app_fusion/OpenClFusionBackend.h"
 
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
@@ -23,6 +24,7 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <thread>
@@ -30,13 +32,6 @@
 
 namespace tri::media::app_fusion {
 namespace {
-
-struct RgbFrame {
-    int width = 0;
-    int height = 0;
-    GstClockTime pts = GST_CLOCK_TIME_NONE;
-    std::vector<std::uint8_t> rgb;
-};
 
 struct LatestFrameStore {
     std::mutex mutex;
@@ -83,6 +78,11 @@ inline std::uint8_t clampToByte(int value) {
 }
 
 std::string boolText(bool v) { return v ? "true" : "false"; }
+
+double elapsedMs(std::chrono::steady_clock::time_point begin,
+                 std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now()) {
+    return static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()) / 1000.0;
+}
 
 std::string buildVisiblePipelineDesc(const AppFusionOptions& opt) {
     std::ostringstream ss;
@@ -567,6 +567,13 @@ public:
         lastError_.clear();
         resetStore(&visibleStore_);
         resetStore(&compositeStore_);
+        gpuFusionReady_ = false;
+        gpuFusionFrames_ = 0;
+        fallbackFusionFrames_ = 0;
+        gpuFusionTotalMs_ = 0.0;
+        fallbackFusionTotalMs_ = 0.0;
+        totalFusionTotalMs_ = 0.0;
+        pushNv12TotalMs_ = 0.0;
 
         visibleDesc_ = buildVisiblePipelineDesc(options_);
         compositeDesc_ = buildCompositePipelineDesc(options_);
@@ -596,10 +603,23 @@ public:
         std::cerr << "[CONFIG] composite=" << options_.compositeDevice << " YUY2 "
                   << options_.compositeWidth << "x" << options_.compositeHeight << "@" << options_.fps << "\n";
         std::cerr << "[CONFIG] output=NV12 " << options_.compositeWidth << "x" << options_.compositeHeight
-                  << " resize=visible_rgb_to_composite_" << options_.compositeWidth << "x" << options_.compositeHeight
-                  << " rgb_to_nv12=RGA(im2d) -> mpph264enc -> udp "
+                  << " compute=OpenCL(optional resize+fusion+RGB2NV12) fallback=RGA/CPU "
+                  << " -> mpph264enc -> udp "
                   << options_.udpHost << ":" << options_.udpPort << "\n";
         std::cerr << "[CONFIG] low_latency: appsink max-buffers=1 drop=true, appsrc block=false do-timestamp=true\n";
+
+        gpuFusion_ = std::make_unique<OpenClFusionBackend>();
+        std::string gpuError;
+        gpuFusionReady_ = gpuFusion_->init(options_.visibleWidth,
+                                           options_.visibleHeight,
+                                           options_.compositeWidth,
+                                           options_.compositeHeight,
+                                           &gpuError);
+        if (gpuFusionReady_) {
+            std::cerr << "[OK][GPU_FUSION] OpenCL backend active: " << gpuFusion_->description() << "\n";
+        } else {
+            std::cerr << "[WARN][GPU_FUSION] OpenCL init failed, fallback to RGA/CPU: " << gpuError << "\n";
+        }
 
         if (!setPlaying("FUSION_ENC", encodePipeline_, &lastError_) ||
             !setPlaying("VISIBLE_IN", visiblePipeline_, &lastError_) ||
@@ -623,6 +643,8 @@ public:
         if (fusionThread_.joinable()) fusionThread_.join();
         cleanupObjects();
         cleanupPipelines();
+        gpuFusionReady_ = false;
+        gpuFusion_.reset();
         running_.store(false);
         return true;
     }
@@ -700,6 +722,30 @@ private:
         return false;
     }
 
+    bool fallbackRgaCpuFuseToNv12(const RgbFrame& visible,
+                                  const RgbFrame& composite,
+                                  double visibleWeight,
+                                  RgbFrame* resizedVisible,
+                                  std::vector<std::uint8_t>* fusedRgb,
+                                  std::vector<std::uint8_t>* fusedNv12) {
+        if (resizedVisible == nullptr || fusedRgb == nullptr || fusedNv12 == nullptr) return false;
+
+        if (!rgaResizeRgb888(visible, composite.width, composite.height, resizedVisible)) {
+            std::cerr << "[ERROR][FUSION] resize visible to composite failed\n";
+            return false;
+        }
+        fuseRgbSameSizeAdaptive(*resizedVisible, composite, visibleWeight, fusedRgb);
+        if (fusedRgb->empty()) {
+            std::cerr << "[ERROR][FUSION] fused RGB is empty\n";
+            return false;
+        }
+        if (!rgaRgbToNv12(*fusedRgb, composite.width, composite.height, fusedNv12)) {
+            std::cerr << "[ERROR][FUSION] RGB->NV12 failed\n";
+            return false;
+        }
+        return true;
+    }
+
     void fusionThreadMain() {
         if (!waitForInitialFrames(5000)) {
             markFailed("timeout waiting for initial visible/composite frames");
@@ -771,23 +817,48 @@ private:
             const double targetVisibleWeight = computeTargetVisibleWeight(stats, lightState.current, maxVisibleWeight);
             visibleWeight = smoothVisibleWeight(visibleWeight, targetVisibleWeight);
 
-            if (!rgaResizeRgb888(visible, composite.width, composite.height, &resizedVisible)) {
-                std::cerr << "[ERROR][FUSION] resize visible to composite failed\n";
-                continue;
+            bool usedGpuFusion = false;
+            const auto fusionBegin = std::chrono::steady_clock::now();
+
+            if (gpuFusionReady_ && gpuFusion_) {
+                GpuFusionParams gpuParams;
+                gpuParams.outputWidth = composite.width;
+                gpuParams.outputHeight = composite.height;
+                gpuParams.visibleWeight = visibleWeight;
+                gpuParams.visibleOffsetX = options_.visibleOffsetX;
+                gpuParams.visibleOffsetY = options_.visibleOffsetY;
+                gpuParams.enableBilinearResize = options_.gpuBilinearResize;
+
+                std::string gpuError;
+                const auto gpuBegin = std::chrono::steady_clock::now();
+                if (gpuFusion_->fuseToNv12(visible, composite, gpuParams, &fusedNv12, &gpuError)) {
+                    gpuFusionTotalMs_ += elapsedMs(gpuBegin);
+                    ++gpuFusionFrames_;
+                    usedGpuFusion = true;
+                } else {
+                    std::cerr << "[WARN][GPU_FUSION] frame failed, fallback to RGA/CPU and disable GPU path: "
+                              << gpuError << "\n";
+                    gpuFusionReady_ = false;
+                }
             }
-            fuseRgbSameSizeAdaptive(resizedVisible, composite, visibleWeight, &fusedRgb);
-            if (fusedRgb.empty()) {
-                std::cerr << "[ERROR][FUSION] fused RGB is empty\n";
-                continue;
+
+            if (!usedGpuFusion) {
+                const auto fallbackBegin = std::chrono::steady_clock::now();
+                if (!fallbackRgaCpuFuseToNv12(visible, composite, visibleWeight, &resizedVisible, &fusedRgb, &fusedNv12)) {
+                    continue;
+                }
+                fallbackFusionTotalMs_ += elapsedMs(fallbackBegin);
+                ++fallbackFusionFrames_;
             }
-            if (!rgaRgbToNv12(fusedRgb, composite.width, composite.height, &fusedNv12)) {
-                std::cerr << "[ERROR][FUSION] RGB->NV12 failed\n";
-                continue;
-            }
+
+            totalFusionTotalMs_ += elapsedMs(fusionBegin);
+
+            const auto pushBegin = std::chrono::steady_clock::now();
             if (!pushNv12Frame(appsrc_, fusedNv12, outPts, frameDuration)) {
                 markFailed("push fused NV12 frame failed");
                 break;
             }
+            pushNv12TotalMs_ += elapsedMs(pushBegin);
             outPts += frameDuration;
             ++fusedFrames;
 
@@ -818,6 +889,26 @@ private:
                           << " repeated_visible=" << repeatedVisible
                           << " repeated_composite=" << repeatedComposite
                           << " sync_warn_count=" << syncWarnCount << "\n";
+            }
+
+            if ((fusedFrames % 150) == 0) {
+                const double avgGpuMs = gpuFusionFrames_ > 0
+                    ? gpuFusionTotalMs_ / static_cast<double>(gpuFusionFrames_) : 0.0;
+                const double avgFallbackMs = fallbackFusionFrames_ > 0
+                    ? fallbackFusionTotalMs_ / static_cast<double>(fallbackFusionFrames_) : 0.0;
+                const double avgTotalFusionMs = fusedFrames > 0
+                    ? totalFusionTotalMs_ / static_cast<double>(fusedFrames) : 0.0;
+                const double avgPushMs = fusedFrames > 0
+                    ? pushNv12TotalMs_ / static_cast<double>(fusedFrames) : 0.0;
+                std::cerr << std::fixed << std::setprecision(2)
+                          << "[GPU_FUSION][STATS] frames=" << fusedFrames
+                          << " gpu_frames=" << gpuFusionFrames_
+                          << " fallback_frames=" << fallbackFusionFrames_
+                          << " avg_gpu_ms=" << avgGpuMs
+                          << " avg_fallback_ms=" << avgFallbackMs
+                          << " avg_total_fusion_ms=" << avgTotalFusionMs
+                          << " avg_push_ms=" << avgPushMs
+                          << " output=" << composite.width << "x" << composite.height << "\n";
             }
 
             nextTick += std::chrono::nanoseconds(static_cast<long long>(frameDuration));
@@ -857,6 +948,15 @@ private:
     GstElement* visibleSink_ = nullptr;
     GstElement* compositeSink_ = nullptr;
     GstElement* appsrc_ = nullptr;
+
+    std::unique_ptr<OpenClFusionBackend> gpuFusion_;
+    bool gpuFusionReady_ = false;
+    std::uint64_t gpuFusionFrames_ = 0;
+    std::uint64_t fallbackFusionFrames_ = 0;
+    double gpuFusionTotalMs_ = 0.0;
+    double fallbackFusionTotalMs_ = 0.0;
+    double totalFusionTotalMs_ = 0.0;
+    double pushNv12TotalMs_ = 0.0;
 
     LatestFrameStore visibleStore_;
     LatestFrameStore compositeStore_;

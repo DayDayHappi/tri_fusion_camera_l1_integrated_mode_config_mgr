@@ -69,6 +69,33 @@ if(NOT TRI_FUSION_GSTREAMER_LIBRARIES)
 endif()
 
 # ============================================================
+# Optional OpenCL dependency for AppFusion GPU backend
+# ============================================================
+find_path(TRI_FUSION_OPENCL_INCLUDE_DIR
+    NAMES CL/cl.h
+    PATHS
+        ${CMAKE_SYSROOT}/usr/include
+        ${TRI_FUSION_BUILDROOT_SYSROOT}/usr/include
+)
+
+find_library(TRI_FUSION_OPENCL_LIBRARY
+    NAMES OpenCL
+    PATHS
+        ${CMAKE_SYSROOT}/usr/lib
+        ${CMAKE_SYSROOT}/usr/lib/aarch64-linux-gnu
+        ${TRI_FUSION_BUILDROOT_SYSROOT}/usr/lib
+        ${TRI_FUSION_BUILDROOT_SYSROOT}/usr/lib/aarch64-linux-gnu
+)
+
+if(TRI_FUSION_OPENCL_INCLUDE_DIR AND TRI_FUSION_OPENCL_LIBRARY)
+    set(TRI_FUSION_APP_HAS_OPENCL 1)
+    message(STATUS "OpenCL found: include=${TRI_FUSION_OPENCL_INCLUDE_DIR}, library=${TRI_FUSION_OPENCL_LIBRARY}")
+else()
+    set(TRI_FUSION_APP_HAS_OPENCL 0)
+    message(WARNING "OpenCL header/library not found; AppFusion GPU backend will compile as fallback stub.")
+endif()
+
+# ============================================================
 # L0 System Foundation Layer
 # ============================================================
 file(GLOB_RECURSE FOUNDATION_SOURCES CONFIGURE_DEPENDS
@@ -176,6 +203,15 @@ target_link_directories(tri_fusion_media
     PUBLIC
         ${TRI_FUSION_GSTREAMER_LIBRARY_DIRS}
 )
+
+target_compile_definitions(tri_fusion_media
+    PUBLIC
+        TRI_FUSION_APP_HAS_OPENCL=${TRI_FUSION_APP_HAS_OPENCL}
+)
+
+if(TRI_FUSION_APP_HAS_OPENCL)
+    target_include_directories(tri_fusion_media PUBLIC ${TRI_FUSION_OPENCL_INCLUDE_DIR})
+endif()
 target_compile_options(tri_fusion_media
     PRIVATE
         -Wall -Wextra -Wpedantic
@@ -192,6 +228,10 @@ target_link_libraries(tri_fusion_media
         m
         pthread
 )
+
+if(TRI_FUSION_APP_HAS_OPENCL)
+    target_link_libraries(tri_fusion_media PUBLIC ${TRI_FUSION_OPENCL_LIBRARY})
+endif()
 
 # ============================================================
 # L5 Algorithm Layer
