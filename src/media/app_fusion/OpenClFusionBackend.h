@@ -22,6 +22,11 @@ struct GpuFusionParams {
     int visibleOffsetX = 0;
     int visibleOffsetY = 0;
 
+    int visibleCropLeft = 0;
+    int visibleCropRight = 0;
+    int visibleCropTop = 0;
+    int visibleCropBottom = 0;
+
     bool enableBilinearResize = false;
 };
 

@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace tri::mode {
 
@@ -27,6 +28,10 @@ public:
     std::string lastError() const;
     std::string activeDescription() const;
 
+    bool setAppFusionVisiblePositionOffset(int offsetX, int offsetY);
+    bool moveAppFusionVisiblePositionOffset(int deltaX, int deltaY);
+    std::pair<int, int> appFusionVisiblePositionOffset() const;
+
 private:
     bool startGstLaunchMode(tri::protocol::private_api::PrivateWorkMode mode);
     bool startAppFusionMode(tri::protocol::private_api::PrivateWorkMode mode);
@@ -40,6 +45,8 @@ private:
     tri::protocol::private_api::PrivateWorkMode currentMode_;
     bool hasMode_{false};
     bool usingAppFusion_{false};
+    int appFusionVisibleOffsetX_{0};
+    int appFusionVisibleOffsetY_{0};
     std::string lastError_;
     std::string activeDescription_;
 };

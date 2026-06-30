@@ -383,6 +383,42 @@ bool cpuResizeRgbNearest(const RgbFrame& src, int dstWidth, int dstHeight, RgbFr
     return true;
 }
 
+bool cropRgb888(const RgbFrame& src, int left, int right, int top, int bottom, RgbFrame* dst) {
+    if (dst == nullptr || src.width <= 0 || src.height <= 0) return false;
+
+    left = std::max(0, left);
+    right = std::max(0, right);
+    top = std::max(0, top);
+    bottom = std::max(0, bottom);
+
+    const int cropWidth = src.width - left - right;
+    const int cropHeight = src.height - top - bottom;
+    if (cropWidth <= 0 || cropHeight <= 0) return false;
+
+    const std::size_t srcSize = static_cast<std::size_t>(src.width) * static_cast<std::size_t>(src.height) * 3;
+    if (src.rgb.size() < srcSize) return false;
+
+    dst->width = cropWidth;
+    dst->height = cropHeight;
+    dst->pts = src.pts;
+    dst->rgb.assign(static_cast<std::size_t>(cropWidth) * static_cast<std::size_t>(cropHeight) * 3, 0);
+
+    for (int y = 0; y < cropHeight; ++y) {
+        const int srcY = top + y;
+        const std::size_t srcOffset =
+            (static_cast<std::size_t>(srcY) * static_cast<std::size_t>(src.width) +
+             static_cast<std::size_t>(left)) * 3;
+        const std::size_t dstOffset =
+            static_cast<std::size_t>(y) * static_cast<std::size_t>(cropWidth) * 3;
+
+        std::memcpy(dst->rgb.data() + dstOffset,
+                    src.rgb.data() + srcOffset,
+                    static_cast<std::size_t>(cropWidth) * 3);
+    }
+
+    return true;
+}
+
 bool rgaResizeRgb888(const RgbFrame& src, int dstWidth, int dstHeight, RgbFrame* dst) {
     if (dst == nullptr || src.width <= 0 || src.height <= 0 || dstWidth <= 0 || dstHeight <= 0) return false;
     const std::size_t srcSize = static_cast<std::size_t>(src.width) * static_cast<std::size_t>(src.height) * 3;
@@ -438,6 +474,82 @@ void fuseRgbSameSizeAdaptive(const RgbFrame& visibleResized,
         (*out)[i + 0] = clampToByte(static_cast<int>(visibleResized.rgb[i + 0] * visibleRatio + composite.rgb[i + 0] * compositeRatio));
         (*out)[i + 1] = clampToByte(static_cast<int>(visibleResized.rgb[i + 1] * visibleRatio + composite.rgb[i + 1] * compositeRatio));
         (*out)[i + 2] = clampToByte(static_cast<int>(visibleResized.rgb[i + 2] * visibleRatio + composite.rgb[i + 2] * compositeRatio));
+    }
+}
+
+void fuseRgbShrinkVisibleBlackBorderAdaptive(const RgbFrame& visible,
+                                            const RgbFrame& composite,
+                                            double visibleWeight,
+                                            int visibleOffsetX,
+                                            int visibleOffsetY,
+                                            int cropLeft,
+                                            int cropRight,
+                                            int cropTop,
+                                            int cropBottom,
+                                            std::vector<std::uint8_t>* out) {
+    if (out == nullptr) return;
+    out->clear();
+    if (visible.width <= 0 || visible.height <= 0 || composite.width <= 0 || composite.height <= 0) return;
+
+    const std::size_t compositeBytes = static_cast<std::size_t>(composite.width) *
+                                      static_cast<std::size_t>(composite.height) * 3;
+    const std::size_t visibleBytes = static_cast<std::size_t>(visible.width) *
+                                    static_cast<std::size_t>(visible.height) * 3;
+    if (composite.rgb.size() < compositeBytes || visible.rgb.size() < visibleBytes) return;
+
+    cropLeft = std::max(0, cropLeft);
+    cropRight = std::max(0, cropRight);
+    cropTop = std::max(0, cropTop);
+    cropBottom = std::max(0, cropBottom);
+
+    cropLeft = std::min(cropLeft, composite.width - 1);
+    cropRight = std::min(cropRight, composite.width - 1);
+    cropTop = std::min(cropTop, composite.height - 1);
+    cropBottom = std::min(cropBottom, composite.height - 1);
+
+    const int dstW = composite.width - cropLeft - cropRight;
+    const int dstH = composite.height - cropTop - cropBottom;
+    const int dstX0 = cropLeft + visibleOffsetX;
+    const int dstY0 = cropTop + visibleOffsetY;
+    const int dstX1 = dstX0 + dstW - 1;
+    const int dstY1 = dstY0 + dstH - 1;
+
+    out->resize(compositeBytes);
+    const double visibleRatio = clampDouble(visibleWeight, 0.0, 1.0);
+    const double compositeRatio = 1.0 - visibleRatio;
+
+    for (int y = 0; y < composite.height; ++y) {
+        for (int x = 0; x < composite.width; ++x) {
+            const std::size_t ci = (static_cast<std::size_t>(y) * composite.width + x) * 3;
+            const int cr = composite.rgb[ci + 0];
+            const int cg = composite.rgb[ci + 1];
+            const int cb = composite.rgb[ci + 2];
+
+            int vr = 0;
+            int vg = 0;
+            int vb = 0;
+
+            if (dstW > 0 && dstH > 0 &&
+                x >= dstX0 && x <= dstX1 &&
+                y >= dstY0 && y <= dstY1) {
+                const int localX = x - dstX0;
+                const int localY = y - dstY0;
+
+                int vx = static_cast<int>((static_cast<long long>(localX) * visible.width) / dstW);
+                int vy = static_cast<int>((static_cast<long long>(localY) * visible.height) / dstH);
+                vx = std::max(0, std::min(vx, visible.width - 1));
+                vy = std::max(0, std::min(vy, visible.height - 1));
+
+                const std::size_t vi = (static_cast<std::size_t>(vy) * visible.width + vx) * 3;
+                vr = visible.rgb[vi + 0];
+                vg = visible.rgb[vi + 1];
+                vb = visible.rgb[vi + 2];
+            }
+
+            (*out)[ci + 0] = clampToByte(static_cast<int>(vr * visibleRatio + cr * compositeRatio));
+            (*out)[ci + 1] = clampToByte(static_cast<int>(vg * visibleRatio + cg * compositeRatio));
+            (*out)[ci + 2] = clampToByte(static_cast<int>(vb * visibleRatio + cb * compositeRatio));
+        }
     }
 }
 
@@ -552,6 +664,8 @@ public:
         }
         options_ = options;
         options_.compositeAlpha = clampDouble(options_.compositeAlpha, 0.0, 1.0);
+        visiblePositionOffsetX_.store(options_.visibleOffsetX);
+        visiblePositionOffsetY_.store(options_.visibleOffsetY);
         if (options_.fps <= 0 || options_.visibleWidth <= 0 || options_.visibleHeight <= 0 ||
             options_.compositeWidth <= 0 || options_.compositeHeight <= 0 ||
             (options_.compositeWidth % 2) != 0 || (options_.compositeHeight % 2) != 0) {
@@ -606,6 +720,16 @@ public:
                   << " compute=OpenCL(optional resize+fusion+RGB2NV12) fallback=RGA/CPU "
                   << " -> mpph264enc -> udp "
                   << options_.udpHost << ":" << options_.udpPort << "\n";
+        std::cerr << "[CONFIG] visible_crop=L" << options_.visibleCropLeft
+                  << " R" << options_.visibleCropRight
+                  << " T" << options_.visibleCropTop
+                  << " B" << options_.visibleCropBottom
+                  << " mode=shrink-black-border"
+                  << " inner="
+                  << (options_.visibleWidth - options_.visibleCropLeft - options_.visibleCropRight)
+                  << "x"
+                  << (options_.visibleHeight - options_.visibleCropTop - options_.visibleCropBottom)
+                  << " black_border=enabled\n";
         std::cerr << "[CONFIG] low_latency: appsink max-buffers=1 drop=true, appsrc block=false do-timestamp=true\n";
 
         gpuFusion_ = std::make_unique<OpenClFusionBackend>();
@@ -650,6 +774,25 @@ public:
     }
 
     bool isRunning() const { return running_.load() && !failed_.load(); }
+
+    bool setVisiblePositionOffset(int offsetX, int offsetY) {
+        visiblePositionOffsetX_.store(offsetX);
+        visiblePositionOffsetY_.store(offsetY);
+        std::cerr << "[CONTROL][FUSION] visible_position offset_x=" << offsetX
+                  << " offset_y=" << offsetY << "\n";
+        return true;
+    }
+
+    bool moveVisiblePositionOffset(int deltaX, int deltaY) {
+        const int newX = visiblePositionOffsetX_.load() + deltaX;
+        const int newY = visiblePositionOffsetY_.load() + deltaY;
+        return setVisiblePositionOffset(newX, newY);
+    }
+
+    std::pair<int, int> visiblePositionOffset() const {
+        return {visiblePositionOffsetX_.load(), visiblePositionOffsetY_.load()};
+    }
+
     std::string lastError() const { return lastError_; }
 
     std::string description() const {
@@ -728,15 +871,31 @@ private:
                                   RgbFrame* resizedVisible,
                                   std::vector<std::uint8_t>* fusedRgb,
                                   std::vector<std::uint8_t>* fusedNv12) {
-        if (resizedVisible == nullptr || fusedRgb == nullptr || fusedNv12 == nullptr) return false;
+        (void)resizedVisible;
+        if (fusedRgb == nullptr || fusedNv12 == nullptr) return false;
 
-        if (!rgaResizeRgb888(visible, composite.width, composite.height, resizedVisible)) {
-            std::cerr << "[ERROR][FUSION] resize visible to composite failed\n";
-            return false;
-        }
-        fuseRgbSameSizeAdaptive(*resizedVisible, composite, visibleWeight, fusedRgb);
+        // Shrink-and-black-border mode:
+        // compress the full visible frame into the inner valid area, for example
+        // 800x600 -> 792x594 at x=4..795/y=3..596.
+        // The border area is filled with black visible pixels before normal fusion.
+        fuseRgbShrinkVisibleBlackBorderAdaptive(visible,
+                                          composite,
+                                          visibleWeight,
+                                          visiblePositionOffsetX_.load(),
+                                          visiblePositionOffsetY_.load(),
+                                          options_.visibleCropLeft,
+                                          options_.visibleCropRight,
+                                          options_.visibleCropTop,
+                                          options_.visibleCropBottom,
+                                          fusedRgb);
         if (fusedRgb->empty()) {
-            std::cerr << "[ERROR][FUSION] fused RGB is empty\n";
+            std::cerr << "[ERROR][FUSION] fused RGB is empty"
+                      << " visible=" << visible.width << "x" << visible.height
+                      << " composite=" << composite.width << "x" << composite.height
+                      << " crop=L" << options_.visibleCropLeft
+                      << " R" << options_.visibleCropRight
+                      << " T" << options_.visibleCropTop
+                      << " B" << options_.visibleCropBottom << "\n";
             return false;
         }
         if (!rgaRgbToNv12(*fusedRgb, composite.width, composite.height, fusedNv12)) {
@@ -825,8 +984,12 @@ private:
                 gpuParams.outputWidth = composite.width;
                 gpuParams.outputHeight = composite.height;
                 gpuParams.visibleWeight = visibleWeight;
-                gpuParams.visibleOffsetX = options_.visibleOffsetX;
-                gpuParams.visibleOffsetY = options_.visibleOffsetY;
+                gpuParams.visibleOffsetX = visiblePositionOffsetX_.load();
+                gpuParams.visibleOffsetY = visiblePositionOffsetY_.load();
+                gpuParams.visibleCropLeft = options_.visibleCropLeft;
+                gpuParams.visibleCropRight = options_.visibleCropRight;
+                gpuParams.visibleCropTop = options_.visibleCropTop;
+                gpuParams.visibleCropBottom = options_.visibleCropBottom;
                 gpuParams.enableBilinearResize = options_.gpuBilinearResize;
 
                 std::string gpuError;
@@ -877,6 +1040,8 @@ private:
                           << " visible_seq=" << visibleSeq
                           << " composite_seq=" << compositeSeq
                           << " raw_diff_ms=" << rawDiffMs
+                          << " visible_position_offset=" << visiblePositionOffsetX_.load()
+                          << "," << visiblePositionOffsetY_.load()
                           << " output=" << composite.width << "x" << composite.height << "\n";
             }
             if ((fusedFrames % (static_cast<std::uint64_t>(options_.fps) * 5)) == 0) {
@@ -958,6 +1123,9 @@ private:
     double totalFusionTotalMs_ = 0.0;
     double pushNv12TotalMs_ = 0.0;
 
+    std::atomic_int visiblePositionOffsetX_{0};
+    std::atomic_int visiblePositionOffsetY_{0};
+
     LatestFrameStore visibleStore_;
     LatestFrameStore compositeStore_;
     std::thread visibleThread_;
@@ -970,6 +1138,15 @@ AppFusionPipeline::~AppFusionPipeline() { stop(); }
 bool AppFusionPipeline::start(const AppFusionOptions& options) { return impl_->start(options); }
 bool AppFusionPipeline::stop() { return impl_->stop(); }
 bool AppFusionPipeline::isRunning() const { return impl_->isRunning(); }
+bool AppFusionPipeline::setVisiblePositionOffset(int offsetX, int offsetY) {
+    return impl_->setVisiblePositionOffset(offsetX, offsetY);
+}
+bool AppFusionPipeline::moveVisiblePositionOffset(int deltaX, int deltaY) {
+    return impl_->moveVisiblePositionOffset(deltaX, deltaY);
+}
+std::pair<int, int> AppFusionPipeline::visiblePositionOffset() const {
+    return impl_->visiblePositionOffset();
+}
 std::string AppFusionPipeline::lastError() const { return impl_->lastError(); }
 std::string AppFusionPipeline::description() const { return impl_->description(); }
 

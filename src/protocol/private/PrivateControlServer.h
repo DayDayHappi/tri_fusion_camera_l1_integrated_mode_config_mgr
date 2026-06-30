@@ -59,6 +59,11 @@ struct CompositeControlCallbacks {
     std::function<PrivateHttpResult(const std::string& sensor,
                                     int value)> setRegistrationZoom;
     std::function<PrivateHttpResult()> queryRegistration;
+
+    std::function<PrivateHttpResult()> queryVisiblePosition;
+    std::function<PrivateHttpResult(int offsetX, int offsetY)> setVisiblePosition;
+    std::function<PrivateHttpResult(const std::string& direction, int step)> moveVisiblePosition;
+
     // Must return a JSON object string, e.g. {"source":"cached",...}
     std::function<std::string()> currentCompositeStatusJson;
 };
@@ -87,6 +92,7 @@ private:
     std::string handleHttpRequest(const std::string& request);
     std::string handleModeRequest(const std::string& method, const std::string& modeName);
     std::string handleCompositeRequest(const std::string& method, const std::string& path);
+    std::string handleFusionRequest(const std::string& method, const std::string& path);
     std::string handleStatusRequest();
 
     static std::string parseMethod(const std::string& request);

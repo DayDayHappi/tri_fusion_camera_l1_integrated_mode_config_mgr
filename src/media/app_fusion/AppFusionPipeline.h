@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace tri::media::app_fusion {
 
@@ -22,6 +23,14 @@ struct AppFusionOptions {
     double compositeAlpha{0.35};
     int visibleOffsetX{0};
     int visibleOffsetY{0};
+
+    // Fusion-only visible shrink/pad before alignment/fusion.
+    // Default: compress visible 800x600 to inner 792x594 and fill L/R=4, T/B=3 border with black visible pixels.
+    int visibleCropLeft{4};
+    int visibleCropRight{4};
+    int visibleCropTop{3};
+    int visibleCropBottom{3};
+
     bool gpuBilinearResize{false};
     std::string convertElement{"videoconvert"};
     bool verbose{false};
@@ -38,6 +47,13 @@ public:
     bool start(const AppFusionOptions& options);
     bool stop();
     bool isRunning() const;
+
+    // Runtime visible image placement offset in fusion output coordinates.
+    // Positive X moves visible image right; negative X moves it left.
+    // Positive Y moves visible image down; negative Y moves it up.
+    bool setVisiblePositionOffset(int offsetX, int offsetY);
+    bool moveVisiblePositionOffset(int deltaX, int deltaY);
+    std::pair<int, int> visiblePositionOffset() const;
 
     std::string lastError() const;
     std::string description() const;

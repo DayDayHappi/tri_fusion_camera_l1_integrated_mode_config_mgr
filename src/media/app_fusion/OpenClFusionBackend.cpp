@@ -154,23 +154,78 @@ inline void fused_rgb_at_gpu(__global const uchar* visible_rgb,
                              float visible_weight,
                              int visible_offset_x,
                              int visible_offset_y,
+                             int crop_left,
+                             int crop_right,
+                             int crop_top,
+                             int crop_bottom,
                              int x,
                              int y,
                              int* out_r,
                              int* out_g,
                              int* out_b) {
-    int vx = (int)(((long)x * (long)visible_w) / (long)out_w) + visible_offset_x;
-    int vy = (int)(((long)y * (long)visible_h) / (long)out_h) + visible_offset_y;
-    vx = clamp_int_gpu(vx, 0, visible_w - 1);
-    vy = clamp_int_gpu(vy, 0, visible_h - 1);
-
-    const int vi = (vy * visible_w + vx) * 3;
     const int ci = (y * out_w + x) * 3;
 
-    const float cw = 1.0f - visible_weight;
-    int r = (int)((float)visible_rgb[vi + 0] * visible_weight + (float)composite_rgb[ci + 0] * cw);
-    int g = (int)((float)visible_rgb[vi + 1] * visible_weight + (float)composite_rgb[ci + 1] * cw);
-    int b = (int)((float)visible_rgb[vi + 2] * visible_weight + (float)composite_rgb[ci + 2] * cw);
+    const int cr = (int)composite_rgb[ci + 0];
+    const int cg = (int)composite_rgb[ci + 1];
+    const int cb = (int)composite_rgb[ci + 2];
+
+    const float vw = clamp((float)visible_weight, 0.0f, 1.0f);
+    const float cw = 1.0f - vw;
+
+    // Shrink-and-black-border mode with runtime placement offset:
+    // Visible input keeps its original size, for example 800x600.
+    // The full visible image is compressed into an inner rectangle whose size is:
+    //   inner_w = out_w - crop_left - crop_right
+    //   inner_h = out_h - crop_top  - crop_bottom
+    // The rectangle is placed at:
+    //   x0 = crop_left + visible_offset_x
+    //   y0 = crop_top  + visible_offset_y
+    // Positive visible_offset_x moves the visible image right.
+    // Positive visible_offset_y moves the visible image down.
+    // Pixels outside the placed rectangle use black visible pixels (0,0,0), then fuse normally.
+    if (visible_w <= 0 || visible_h <= 0 || out_w <= 0 || out_h <= 0) {
+        *out_r = clamp_int_gpu((int)((float)cr * cw), 0, 255);
+        *out_g = clamp_int_gpu((int)((float)cg * cw), 0, 255);
+        *out_b = clamp_int_gpu((int)((float)cb * cw), 0, 255);
+        return;
+    }
+
+    crop_left = clamp_int_gpu(crop_left, 0, out_w - 1);
+    crop_right = clamp_int_gpu(crop_right, 0, out_w - 1);
+    crop_top = clamp_int_gpu(crop_top, 0, out_h - 1);
+    crop_bottom = clamp_int_gpu(crop_bottom, 0, out_h - 1);
+
+    const int dst_w = out_w - crop_left - crop_right;
+    const int dst_h = out_h - crop_top - crop_bottom;
+    const int dst_x0 = crop_left + visible_offset_x;
+    const int dst_y0 = crop_top + visible_offset_y;
+    const int dst_x1 = dst_x0 + dst_w - 1;
+    const int dst_y1 = dst_y0 + dst_h - 1;
+
+    int vr = 0;
+    int vg = 0;
+    int vb = 0;
+
+    if (dst_w > 0 && dst_h > 0 &&
+        x >= dst_x0 && x <= dst_x1 &&
+        y >= dst_y0 && y <= dst_y1) {
+        const int local_x = x - dst_x0;
+        const int local_y = y - dst_y0;
+
+        int vx = (int)(((long)local_x * (long)visible_w) / (long)dst_w);
+        int vy = (int)(((long)local_y * (long)visible_h) / (long)dst_h);
+        vx = clamp_int_gpu(vx, 0, visible_w - 1);
+        vy = clamp_int_gpu(vy, 0, visible_h - 1);
+
+        const int vi = (vy * visible_w + vx) * 3;
+        vr = (int)visible_rgb[vi + 0];
+        vg = (int)visible_rgb[vi + 1];
+        vb = (int)visible_rgb[vi + 2];
+    }
+
+    int r = (int)((float)vr * vw + (float)cr * cw);
+    int g = (int)((float)vg * vw + (float)cg * cw);
+    int b = (int)((float)vb * vw + (float)cb * cw);
 
     *out_r = clamp_int_gpu(r, 0, 255);
     *out_g = clamp_int_gpu(g, 0, 255);
@@ -187,6 +242,10 @@ __kernel void fuse_rgb_to_nv12_2x2(__global const uchar* visible_rgb,
                                    float visible_weight,
                                    int visible_offset_x,
                                    int visible_offset_y,
+                                   int crop_left,
+                                   int crop_right,
+                                   int crop_top,
+                                   int crop_bottom,
                                    int enable_bilinear_resize) {
     (void)enable_bilinear_resize;
 
@@ -214,6 +273,7 @@ __kernel void fuse_rgb_to_nv12_2x2(__global const uchar* visible_rgb,
                              out_w, out_h,
                              visible_weight,
                              visible_offset_x, visible_offset_y,
+                             crop_left, crop_right, crop_top, crop_bottom,
                              x, y,
                              &r, &g, &b);
 
@@ -481,6 +541,10 @@ public:
         float visibleWeight = static_cast<float>(std::max(0.0, std::min(1.0, params.visibleWeight)));
         const int offsetX = params.visibleOffsetX;
         const int offsetY = params.visibleOffsetY;
+        const int cropLeft = std::max(0, params.visibleCropLeft);
+        const int cropRight = std::max(0, params.visibleCropRight);
+        const int cropTop = std::max(0, params.visibleCropTop);
+        const int cropBottom = std::max(0, params.visibleCropBottom);
         const int bilinear = params.enableBilinearResize ? 1 : 0;
 
         int arg = 0;
@@ -494,6 +558,10 @@ public:
         err |= clSetKernelArg(kernel_, arg++, sizeof(float), &visibleWeight);
         err |= clSetKernelArg(kernel_, arg++, sizeof(int), &offsetX);
         err |= clSetKernelArg(kernel_, arg++, sizeof(int), &offsetY);
+        err |= clSetKernelArg(kernel_, arg++, sizeof(int), &cropLeft);
+        err |= clSetKernelArg(kernel_, arg++, sizeof(int), &cropRight);
+        err |= clSetKernelArg(kernel_, arg++, sizeof(int), &cropTop);
+        err |= clSetKernelArg(kernel_, arg++, sizeof(int), &cropBottom);
         err |= clSetKernelArg(kernel_, arg++, sizeof(int), &bilinear);
         if (err != CL_SUCCESS) {
             setError(errorOut, "clSetKernelArg failed: " + clErrorName(err));

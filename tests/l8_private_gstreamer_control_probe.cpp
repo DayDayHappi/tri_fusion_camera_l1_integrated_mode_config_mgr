@@ -107,7 +107,11 @@ void printUsage(const char* program) {
         << "  /api/v1/composite/registration\n"
         << "  /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}\n"
         << "  /api/v1/composite/registration/{infrared|lowlight}/zoom/{value}\n"
-        << "  /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\n";
+        << "  /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\n"
+        << "\nFusion visible-position APIs:\n"
+        << "  /api/v1/fusion/visible_position\n"
+        << "  /api/v1/fusion/visible_position/{x}/{y}\n"
+        << "  /api/v1/fusion/visible_position/move/{left|right|up|down}/{step}\n";
 }
 
 bool readValue(int& i, int argc, char** argv, std::string* out) {
@@ -160,6 +164,13 @@ bool mapPrivateModeToCompositeOutput(
             return true;
     }
     return false;
+}
+
+bool isVisibleFusionMode(tri::protocol::private_api::PrivateWorkMode mode) {
+    using tri::protocol::private_api::PrivateWorkMode;
+    return mode == PrivateWorkMode::VisibleLowlightFusion ||
+           mode == PrivateWorkMode::VisibleThermalFusion ||
+           mode == PrivateWorkMode::VisibleCompositeFusion;
 }
 
 bool parseArgs(int argc,
@@ -847,6 +858,79 @@ int main(int argc, char** argv) {
              << ",\"x\":" << static_cast<std::int16_t>(lowXRaw)
              << ",\"y\":" << static_cast<std::int16_t>(lowYRaw) << "}}}";
         return jsonResult(body.str(), true);
+    };
+
+    auto makeVisiblePositionBody = [&](const std::string& action,
+                                      bool activeFusionMode,
+                                      const std::string& message) -> PrivateHttpResult {
+        const auto pos = videoRuntime.appFusionVisiblePositionOffset();
+        std::ostringstream body;
+        body << "{\"ok\":true"
+             << ",\"action\":\"" << jsonEscape(action) << "\""
+             << ",\"visible_position\":{"
+             << "\"x\":" << pos.first
+             << ",\"y\":" << pos.second
+             << ",\"direction_rule\":\"positive_x_moves_visible_right_positive_y_moves_visible_down\""
+             << "}"
+             << ",\"active_fusion_mode\":" << (activeFusionMode ? "true" : "false")
+             << ",\"current_mode\":\"" << jsonEscape(toString(currentMode)) << "\""
+             << ",\"message\":\"" << jsonEscape(message) << "\""
+             << "}";
+        return jsonResult(body.str(), true);
+    };
+
+    compositeCallbacks.queryVisiblePosition = [&]() -> PrivateHttpResult {
+        std::lock_guard<std::mutex> lock(runtimeMutex);
+        return makeVisiblePositionBody("query_visible_position",
+                                       isVisibleFusionMode(currentMode),
+                                       "visible position queried");
+    };
+
+    compositeCallbacks.setVisiblePosition = [&](int offsetX, int offsetY) -> PrivateHttpResult {
+        if (offsetX < -4096 || offsetX > 4096 || offsetY < -4096 || offsetY > 4096) {
+            return errorJson("set_visible_position", "x and y must be in range -4096..4096");
+        }
+        std::lock_guard<std::mutex> lock(runtimeMutex);
+        if (!videoRuntime.setAppFusionVisiblePositionOffset(offsetX, offsetY)) {
+            return errorJson("set_visible_position", "failed to set visible position: " + videoRuntime.lastError());
+        }
+        return makeVisiblePositionBody("set_visible_position",
+                                       isVisibleFusionMode(currentMode),
+                                       isVisibleFusionMode(currentMode)
+                                           ? "visible position updated for current fusion stream"
+                                           : "visible position saved and will apply when a fusion mode starts");
+    };
+
+    compositeCallbacks.moveVisiblePosition = [&](const std::string& direction, int step) -> PrivateHttpResult {
+        if (step <= 0 || step > 4096) {
+            return errorJson("move_visible_position", "step must be in range 1..4096");
+        }
+
+        int dx = 0;
+        int dy = 0;
+        if (direction == "left") dx = -step;
+        else if (direction == "right") dx = step;
+        else if (direction == "up") dy = -step;
+        else if (direction == "down") dy = step;
+        else {
+            return errorJson("move_visible_position", "direction must be left, right, up or down");
+        }
+
+        std::lock_guard<std::mutex> lock(runtimeMutex);
+        const auto oldPos = videoRuntime.appFusionVisiblePositionOffset();
+        const int newX = oldPos.first + dx;
+        const int newY = oldPos.second + dy;
+        if (newX < -4096 || newX > 4096 || newY < -4096 || newY > 4096) {
+            return errorJson("move_visible_position", "new visible position would exceed range -4096..4096");
+        }
+        if (!videoRuntime.moveAppFusionVisiblePositionOffset(dx, dy)) {
+            return errorJson("move_visible_position", "failed to move visible position: " + videoRuntime.lastError());
+        }
+        return makeVisiblePositionBody("move_visible_position",
+                                       isVisibleFusionMode(currentMode),
+                                       isVisibleFusionMode(currentMode)
+                                           ? "visible position moved for current fusion stream"
+                                           : "visible position saved and will apply when a fusion mode starts");
     };
 
     compositeCallbacks.queryConfig = [&]() -> PrivateHttpResult {

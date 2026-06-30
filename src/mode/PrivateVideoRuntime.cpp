@@ -4,6 +4,7 @@
 
 #include <iostream>
 #include <sstream>
+#include <utility>
 
 namespace tri::mode {
 namespace {
@@ -90,6 +91,24 @@ std::string PrivateVideoRuntime::activeDescription() const {
     return activeDescription_;
 }
 
+bool PrivateVideoRuntime::setAppFusionVisiblePositionOffset(int offsetX, int offsetY) {
+    appFusionVisibleOffsetX_ = offsetX;
+    appFusionVisibleOffsetY_ = offsetY;
+    if (usingAppFusion_ && appFusionPipeline_.isRunning()) {
+        return appFusionPipeline_.setVisiblePositionOffset(offsetX, offsetY);
+    }
+    return true;
+}
+
+bool PrivateVideoRuntime::moveAppFusionVisiblePositionOffset(int deltaX, int deltaY) {
+    return setAppFusionVisiblePositionOffset(appFusionVisibleOffsetX_ + deltaX,
+                                             appFusionVisibleOffsetY_ + deltaY);
+}
+
+std::pair<int, int> PrivateVideoRuntime::appFusionVisiblePositionOffset() const {
+    return {appFusionVisibleOffsetX_, appFusionVisibleOffsetY_};
+}
+
 bool PrivateVideoRuntime::startGstLaunchMode(PrivateWorkMode mode) {
     const std::string commandName = toCommandName(mode);
     const auto cfg = configManager_.configForModeCommand(commandName);
@@ -142,6 +161,8 @@ tri::media::app_fusion::AppFusionOptions PrivateVideoRuntime::buildAppFusionOpti
     opt.fps = targetCfg.fps > 0 ? targetCfg.fps : 30;
 
     opt.compositeAlpha = 0.35;
+    opt.visibleOffsetX = appFusionVisibleOffsetX_;
+    opt.visibleOffsetY = appFusionVisibleOffsetY_;
     opt.convertElement = "videoconvert";
     opt.verbose = false;
     return opt;
@@ -154,7 +175,13 @@ bool PrivateVideoRuntime::startAppFusionMode(PrivateWorkMode mode) {
               << " visible=" << opt.visibleDevice << " " << opt.visibleWidth << "x" << opt.visibleHeight
               << " composite=" << opt.compositeDevice << " " << opt.compositeWidth << "x" << opt.compositeHeight
               << " fps=" << opt.fps
-              << " udp=" << opt.udpHost << ":" << opt.udpPort << "\n";
+              << " udp=" << opt.udpHost << ":" << opt.udpPort
+              << " visible_shrink_black_border=L" << opt.visibleCropLeft
+              << " R" << opt.visibleCropRight
+              << " T" << opt.visibleCropTop
+              << " B" << opt.visibleCropBottom
+              << " visible_position_offset=" << opt.visibleOffsetX << "," << opt.visibleOffsetY
+              << "\n";
 
     if (!appFusionPipeline_.start(opt)) {
         lastError_ = "failed to start app RGB fusion pipeline: " + appFusionPipeline_.lastError();
