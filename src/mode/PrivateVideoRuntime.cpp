@@ -2,6 +2,9 @@
 
 #include "protocol/private/PrivateControlServer.h"
 
+#include <cctype>
+#include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <utility>
@@ -36,6 +39,31 @@ bool isAppFusionMode(PrivateWorkMode mode) {
     return mode == PrivateWorkMode::VisibleLowlightFusion ||
            mode == PrivateWorkMode::VisibleThermalFusion ||
            mode == PrivateWorkMode::VisibleCompositeFusion;
+}
+
+std::string trimCopy(const std::string& text) {
+    std::size_t begin = 0;
+    while (begin < text.size() && std::isspace(static_cast<unsigned char>(text[begin]))) ++begin;
+
+    std::size_t end = text.size();
+    while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1]))) --end;
+
+    return text.substr(begin, end - begin);
+}
+
+bool parseIntStrict(const std::string& text, int* value) {
+    if (value == nullptr) return false;
+
+    try {
+        std::size_t consumed = 0;
+        const int parsed = std::stoi(trimCopy(text), &consumed, 10);
+        const std::string trimmed = trimCopy(text);
+        if (consumed != trimmed.size()) return false;
+        *value = parsed;
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 } // namespace
@@ -145,6 +173,120 @@ bool PrivateVideoRuntime::setAppFusionVisibleShrinkPixels(int horizontalPixels, 
 
 std::pair<int, int> PrivateVideoRuntime::appFusionVisibleShrinkPixels() const {
     return {appFusionVisibleShrinkHorizontal_, appFusionVisibleShrinkVertical_};
+}
+
+bool PrivateVideoRuntime::saveAppFusionVisibleAdjustment(const std::string& path) {
+    if (path.empty()) {
+        lastError_ = "visible adjustment save path is empty";
+        return false;
+    }
+
+    const std::string tmpPath = path + ".tmp";
+    std::ofstream out(tmpPath, std::ios::out | std::ios::trunc);
+    if (!out.is_open()) {
+        lastError_ = "failed to open visible adjustment temp file for write: " + tmpPath;
+        return false;
+    }
+
+    out << "# Tri-fusion visible fusion adjustment\n";
+    out << "# Saved by /api/v1/fusion/visible_adjustment/save\n";
+    out << "visible_offset_x=" << appFusionVisibleOffsetX_ << "\n";
+    out << "visible_offset_y=" << appFusionVisibleOffsetY_ << "\n";
+    out << "visible_shrink_horizontal=" << appFusionVisibleShrinkHorizontal_ << "\n";
+    out << "visible_shrink_vertical=" << appFusionVisibleShrinkVertical_ << "\n";
+    out.close();
+
+    if (!out) {
+        lastError_ = "failed to write visible adjustment temp file: " + tmpPath;
+        std::remove(tmpPath.c_str());
+        return false;
+    }
+
+    if (std::rename(tmpPath.c_str(), path.c_str()) != 0) {
+        lastError_ = "failed to rename visible adjustment temp file to final path: " + path;
+        std::remove(tmpPath.c_str());
+        return false;
+    }
+
+    std::cerr << "[VIDEO][RUNTIME] saved visible fusion adjustment path=" << path
+              << " offset=" << appFusionVisibleOffsetX_ << "," << appFusionVisibleOffsetY_
+              << " shrink=" << appFusionVisibleShrinkHorizontal_ << "," << appFusionVisibleShrinkVertical_
+              << "\n";
+    return true;
+}
+
+bool PrivateVideoRuntime::loadAppFusionVisibleAdjustment(const std::string& path) {
+    if (path.empty()) {
+        lastError_ = "visible adjustment load path is empty";
+        return false;
+    }
+
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        std::cerr << "[VIDEO][RUNTIME] visible fusion adjustment config not found, use defaults path="
+                  << path << "\n";
+        return true;
+    }
+
+    int offsetX = appFusionVisibleOffsetX_;
+    int offsetY = appFusionVisibleOffsetY_;
+    int shrinkHorizontal = appFusionVisibleShrinkHorizontal_;
+    int shrinkVertical = appFusionVisibleShrinkVertical_;
+
+    std::string line;
+    int lineNo = 0;
+    while (std::getline(in, line)) {
+        ++lineNo;
+        std::string trimmed = trimCopy(line);
+        if (trimmed.empty() || trimmed[0] == '#') continue;
+
+        const std::size_t eq = trimmed.find('=');
+        if (eq == std::string::npos) {
+            lastError_ = "invalid visible adjustment line without '=' at " + path + ":" + std::to_string(lineNo);
+            return false;
+        }
+
+        const std::string key = trimCopy(trimmed.substr(0, eq));
+        const std::string valueText = trimCopy(trimmed.substr(eq + 1));
+        int value = 0;
+        if (!parseIntStrict(valueText, &value)) {
+            lastError_ = "invalid integer value for key '" + key + "' at " + path + ":" + std::to_string(lineNo);
+            return false;
+        }
+
+        if (key == "visible_offset_x") {
+            offsetX = value;
+        } else if (key == "visible_offset_y") {
+            offsetY = value;
+        } else if (key == "visible_shrink_horizontal") {
+            shrinkHorizontal = value;
+        } else if (key == "visible_shrink_vertical") {
+            shrinkVertical = value;
+        } else {
+            std::cerr << "[VIDEO][RUNTIME] ignore unknown visible adjustment key=" << key
+                      << " path=" << path << " line=" << lineNo << "\n";
+        }
+    }
+
+    if (offsetX < -4096 || offsetX > 4096 || offsetY < -4096 || offsetY > 4096) {
+        lastError_ = "loaded visible offset out of range -4096..4096 from " + path;
+        return false;
+    }
+    if (shrinkHorizontal < 0 || shrinkHorizontal > 798 || shrinkVertical < 0 || shrinkVertical > 598) {
+        lastError_ = "loaded visible shrink out of range, horizontal 0..798 vertical 0..598 from " + path;
+        return false;
+    }
+
+    appFusionVisibleOffsetX_ = offsetX;
+    appFusionVisibleOffsetY_ = offsetY;
+    appFusionVisibleShrinkHorizontal_ = shrinkHorizontal;
+    appFusionVisibleShrinkVertical_ = shrinkVertical;
+
+    std::cerr << "[VIDEO][RUNTIME] loaded visible fusion adjustment path=" << path
+              << " offset=" << appFusionVisibleOffsetX_ << "," << appFusionVisibleOffsetY_
+              << " shrink=" << appFusionVisibleShrinkHorizontal_ << "," << appFusionVisibleShrinkVertical_
+              << "\n";
+    return true;
 }
 
 bool PrivateVideoRuntime::startGstLaunchMode(PrivateWorkMode mode) {

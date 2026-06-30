@@ -175,6 +175,17 @@ bool isVisibleFusionMode(tri::protocol::private_api::PrivateWorkMode mode) {
            mode == PrivateWorkMode::VisibleCompositeFusion;
 }
 
+std::string joinPath(const std::string& dir, const std::string& name) {
+    if (dir.empty()) return std::string("./configs/") + name;
+    if (dir.back() == '/') return dir + name;
+    return dir + "/" + name;
+}
+
+std::string fusionVisibleAdjustmentPath(const tri::media::gstreamer::GStreamerConfigManagerOptions& options) {
+    return joinPath(options.configDir.empty() ? std::string("./configs") : options.configDir,
+                    "fusion_visible_adjustment.conf");
+}
+
 bool parseArgs(int argc,
                char** argv,
                tri::media::gstreamer::GStreamerConfigManagerOptions* gstMgrOptions,
@@ -343,6 +354,11 @@ int main(int argc, char** argv) {
 
     PrivateWorkMode currentMode = PrivateWorkMode::LowlightThermalComposite;
     PrivateVideoRuntime videoRuntime(gstConfigMgr);
+    const std::string visibleAdjustmentPath = fusionVisibleAdjustmentPath(gstMgrOptions);
+    if (!videoRuntime.loadAppFusionVisibleAdjustment(visibleAdjustmentPath)) {
+        std::cerr << "[WARN] failed to load visible fusion adjustment: "
+                  << videoRuntime.lastError() << "\n";
+    }
     CompositeSensorController compositeController;
 
     std::cout << "\n========== Private GStreamer Control Probe ==========" << "\n";
@@ -994,6 +1010,49 @@ int main(int argc, char** argv) {
                                      isVisibleFusionMode(currentMode)
                                          ? "visible shrink updated for current fusion stream"
                                          : "visible shrink saved and will apply when a fusion mode starts");
+    };
+
+    compositeCallbacks.saveVisibleAdjustment = [&]() -> PrivateHttpResult {
+        std::lock_guard<std::mutex> lock(runtimeMutex);
+
+        const auto pos = videoRuntime.appFusionVisiblePositionOffset();
+        const auto shrink = videoRuntime.appFusionVisibleShrinkPixels();
+        const int horizontal = shrink.first;
+        const int vertical = shrink.second;
+        const int left = horizontal / 2;
+        const int right = horizontal - left;
+        const int top = vertical / 2;
+        const int bottom = vertical - top;
+
+        if (!videoRuntime.saveAppFusionVisibleAdjustment(visibleAdjustmentPath)) {
+            return errorJson("save_visible_adjustment",
+                             "failed to save visible adjustment: " + videoRuntime.lastError());
+        }
+
+        std::ostringstream body;
+        body << std::fixed << std::setprecision(6)
+             << "{\"ok\":true"
+             << ",\"action\":\"save_visible_adjustment\""
+             << ",\"path\":\"" << jsonEscape(visibleAdjustmentPath) << "\""
+             << ",\"visible_position\":{"
+             << "\"x\":" << pos.first
+             << ",\"y\":" << pos.second
+             << "}"
+             << ",\"visible_shrink\":{"
+             << "\"horizontal\":" << horizontal
+             << ",\"vertical\":" << vertical
+             << ",\"left\":" << left
+             << ",\"right\":" << right
+             << ",\"top\":" << top
+             << ",\"bottom\":" << bottom
+             << "}"
+             << ",\"scale_ratio_if_output_800x600\":{"
+             << "\"x\":" << (800.0 - static_cast<double>(horizontal)) / 800.0
+             << ",\"y\":" << (600.0 - static_cast<double>(vertical)) / 600.0
+             << "}"
+             << ",\"message\":\"current visible position and shrink settings saved; they will be loaded on next startup\""
+             << "}";
+        return jsonResult(body.str(), true);
     };
 
     compositeCallbacks.queryConfig = [&]() -> PrivateHttpResult {

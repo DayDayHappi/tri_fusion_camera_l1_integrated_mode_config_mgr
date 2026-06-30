@@ -66,6 +66,7 @@ struct CompositeControlCallbacks {
 
     std::function<PrivateHttpResult()> queryVisibleShrink;
     std::function<PrivateHttpResult(int horizontalPixels, int verticalPixels)> setVisibleShrink;
+    std::function<PrivateHttpResult()> saveVisibleAdjustment;
 
     // Must return a JSON object string, e.g. {"source":"cached",...}
     std::function<std::string()> currentCompositeStatusJson;

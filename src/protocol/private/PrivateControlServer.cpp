@@ -255,7 +255,7 @@ std::string PrivateControlServer::handleHttpRequest(const std::string& request) 
     }
 
     return httpJson(404, "Not Found",
-        "{\"ok\":false,\"error\":\"unknown api\",\"usage\":\"/api/v1/mode/{mode}, /api/v1/composite/fusion_color/{value}, /api/v1/composite/contour/{value}, /api/v1/composite/infrared_polarity/{value}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/zoom/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_position, /api/v1/fusion/visible_position/{x}/{y}, /api/v1/fusion/visible_position/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_shrink, /api/v1/fusion/visible_shrink/{horizontal}/{vertical}\"}");
+        "{\"ok\":false,\"error\":\"unknown api\",\"usage\":\"/api/v1/mode/{mode}, /api/v1/composite/fusion_color/{value}, /api/v1/composite/contour/{value}, /api/v1/composite/infrared_polarity/{value}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/zoom/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_position, /api/v1/fusion/visible_position/{x}/{y}, /api/v1/fusion/visible_position/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_shrink, /api/v1/fusion/visible_shrink/{horizontal}/{vertical}, /api/v1/fusion/visible_adjustment/save\"}");
 }
 
 std::string PrivateControlServer::handleModeRequest(const std::string& method,
@@ -413,7 +413,7 @@ std::string PrivateControlServer::handleCompositeRequest(const std::string& meth
     }
 
     return httpJson(404, "Not Found",
-        "{\"ok\":false,\"error\":\"unknown composite api\",\"usage\":\"/api/v1/composite/fusion_color/{black_white|forest|snow|ocean|city|desert|default|7}, /api/v1/composite/contour/{off|red|green|blue|purple}, /api/v1/composite/infrared_polarity/{white_hot|black_hot}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/zoom/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_position, /api/v1/fusion/visible_position/{x}/{y}, /api/v1/fusion/visible_position/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_shrink, /api/v1/fusion/visible_shrink/{horizontal}/{vertical}\"}");
+        "{\"ok\":false,\"error\":\"unknown composite api\",\"usage\":\"/api/v1/composite/fusion_color/{black_white|forest|snow|ocean|city|desert|default|7}, /api/v1/composite/contour/{off|red|green|blue|purple}, /api/v1/composite/infrared_polarity/{white_hot|black_hot}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/zoom/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_position, /api/v1/fusion/visible_position/{x}/{y}, /api/v1/fusion/visible_position/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_shrink, /api/v1/fusion/visible_shrink/{horizontal}/{vertical}, /api/v1/fusion/visible_adjustment/save\"}");
 }
 
 std::string PrivateControlServer::handleFusionRequest(const std::string& method,
@@ -430,6 +430,13 @@ std::string PrivateControlServer::handleFusionRequest(const std::string& method,
     if (path == "visible_shrink" || path == "visible_resize" || path == "visible_border") {
         return invokeCompositeCallback(compositeCallbacks_.queryVisibleShrink,
                                        "query_visible_shrink callback is not installed");
+    }
+
+    if (path == "visible_adjustment/save" ||
+        path == "visible_save" ||
+        path == "save_visible_adjustment") {
+        return invokeCompositeCallback(compositeCallbacks_.saveVisibleAdjustment,
+                                       "save_visible_adjustment callback is not installed");
     }
 
     constexpr const char* visiblePositionPrefix = "visible_position/";
@@ -459,7 +466,7 @@ std::string PrivateControlServer::handleFusionRequest(const std::string& method,
         isShrinkPath = true;
     } else {
         return httpJson(404, "Not Found",
-            "{\"ok\":false,\"error\":\"unknown fusion api\",\"usage\":\"/api/v1/fusion/visible_position, /api/v1/fusion/visible_position/{x}/{y}, /api/v1/fusion/visible_position/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_shrink, /api/v1/fusion/visible_shrink/{horizontal}/{vertical}\"}");
+            "{\"ok\":false,\"error\":\"unknown fusion api\",\"usage\":\"/api/v1/fusion/visible_position, /api/v1/fusion/visible_position/{x}/{y}, /api/v1/fusion/visible_position/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_shrink, /api/v1/fusion/visible_shrink/{horizontal}/{vertical}, /api/v1/fusion/visible_adjustment/save\"}");
     }
 
     const auto parts = splitPath(rest);
@@ -589,7 +596,8 @@ std::string PrivateControlServer::handleStatusRequest() {
          << "\"/api/v1/fusion/visible_position/{x}/{y}\","
          << "\"/api/v1/fusion/visible_position/move/{left|right|up|down}/{step}\","
          << "\"/api/v1/fusion/visible_shrink\","
-         << "\"/api/v1/fusion/visible_shrink/{horizontal}/{vertical}\""
+         << "\"/api/v1/fusion/visible_shrink/{horizontal}/{vertical}\","
+         << "\"/api/v1/fusion/visible_adjustment/save\""
          << "]"
          << "}";
     return httpJson(200, "OK", body.str());

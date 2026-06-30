@@ -35,6 +35,9 @@ public:
     bool setAppFusionVisibleShrinkPixels(int horizontalPixels, int verticalPixels);
     std::pair<int, int> appFusionVisibleShrinkPixels() const;
 
+    bool saveAppFusionVisibleAdjustment(const std::string& path);
+    bool loadAppFusionVisibleAdjustment(const std::string& path);
+
 private:
     bool startGstLaunchMode(tri::protocol::private_api::PrivateWorkMode mode);
     bool startAppFusionMode(tri::protocol::private_api::PrivateWorkMode mode);
