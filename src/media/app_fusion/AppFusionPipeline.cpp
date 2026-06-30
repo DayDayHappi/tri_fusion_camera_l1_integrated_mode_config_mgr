@@ -84,6 +84,25 @@ double elapsedMs(std::chrono::steady_clock::time_point begin,
     return static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(end - begin).count()) / 1000.0;
 }
 
+struct VisibleBorderPixels {
+    int left = 0;
+    int right = 0;
+    int top = 0;
+    int bottom = 0;
+};
+
+VisibleBorderPixels splitVisibleShrinkPixels(int horizontalPixels, int verticalPixels) {
+    horizontalPixels = std::max(0, horizontalPixels);
+    verticalPixels = std::max(0, verticalPixels);
+
+    VisibleBorderPixels border;
+    border.left = horizontalPixels / 2;
+    border.right = horizontalPixels - border.left;
+    border.top = verticalPixels / 2;
+    border.bottom = verticalPixels - border.top;
+    return border;
+}
+
 std::string buildVisiblePipelineDesc(const AppFusionOptions& opt) {
     std::ostringstream ss;
     ss << "v4l2src device=" << opt.visibleDevice << " io-mode=mmap "
@@ -664,8 +683,21 @@ public:
         }
         options_ = options;
         options_.compositeAlpha = clampDouble(options_.compositeAlpha, 0.0, 1.0);
+
+        const auto initialBorder = splitVisibleShrinkPixels(
+            options_.visibleCropLeft + options_.visibleCropRight,
+            options_.visibleCropTop + options_.visibleCropBottom);
+        options_.visibleCropLeft = initialBorder.left;
+        options_.visibleCropRight = initialBorder.right;
+        options_.visibleCropTop = initialBorder.top;
+        options_.visibleCropBottom = initialBorder.bottom;
+
         visiblePositionOffsetX_.store(options_.visibleOffsetX);
         visiblePositionOffsetY_.store(options_.visibleOffsetY);
+        visibleCropLeft_.store(options_.visibleCropLeft);
+        visibleCropRight_.store(options_.visibleCropRight);
+        visibleCropTop_.store(options_.visibleCropTop);
+        visibleCropBottom_.store(options_.visibleCropBottom);
         if (options_.fps <= 0 || options_.visibleWidth <= 0 || options_.visibleHeight <= 0 ||
             options_.compositeWidth <= 0 || options_.compositeHeight <= 0 ||
             (options_.compositeWidth % 2) != 0 || (options_.compositeHeight % 2) != 0) {
@@ -793,6 +825,43 @@ public:
         return {visiblePositionOffsetX_.load(), visiblePositionOffsetY_.load()};
     }
 
+    bool setVisibleShrinkPixels(int horizontalPixels, int verticalPixels) {
+        if (horizontalPixels < 0 || verticalPixels < 0) {
+            lastError_ = "visible shrink pixels must be non-negative";
+            return false;
+        }
+        if (options_.compositeWidth > 0 && horizontalPixels >= options_.compositeWidth) {
+            lastError_ = "visible horizontal shrink must be smaller than output width";
+            return false;
+        }
+        if (options_.compositeHeight > 0 && verticalPixels >= options_.compositeHeight) {
+            lastError_ = "visible vertical shrink must be smaller than output height";
+            return false;
+        }
+
+        const auto border = splitVisibleShrinkPixels(horizontalPixels, verticalPixels);
+        visibleCropLeft_.store(border.left);
+        visibleCropRight_.store(border.right);
+        visibleCropTop_.store(border.top);
+        visibleCropBottom_.store(border.bottom);
+
+        std::cerr << "[CONTROL][FUSION] visible_shrink horizontal=" << horizontalPixels
+                  << " vertical=" << verticalPixels
+                  << " border=L" << border.left
+                  << " R" << border.right
+                  << " T" << border.top
+                  << " B" << border.bottom
+                  << " inner=" << (options_.compositeWidth - border.left - border.right)
+                  << "x" << (options_.compositeHeight - border.top - border.bottom)
+                  << " mode=shrink-black-border\n";
+        return true;
+    }
+
+    std::pair<int, int> visibleShrinkPixels() const {
+        return {visibleCropLeft_.load() + visibleCropRight_.load(),
+                visibleCropTop_.load() + visibleCropBottom_.load()};
+    }
+
     std::string lastError() const { return lastError_; }
 
     std::string description() const {
@@ -883,19 +952,19 @@ private:
                                           visibleWeight,
                                           visiblePositionOffsetX_.load(),
                                           visiblePositionOffsetY_.load(),
-                                          options_.visibleCropLeft,
-                                          options_.visibleCropRight,
-                                          options_.visibleCropTop,
-                                          options_.visibleCropBottom,
+                                          visibleCropLeft_.load(),
+                                          visibleCropRight_.load(),
+                                          visibleCropTop_.load(),
+                                          visibleCropBottom_.load(),
                                           fusedRgb);
         if (fusedRgb->empty()) {
             std::cerr << "[ERROR][FUSION] fused RGB is empty"
                       << " visible=" << visible.width << "x" << visible.height
                       << " composite=" << composite.width << "x" << composite.height
-                      << " crop=L" << options_.visibleCropLeft
-                      << " R" << options_.visibleCropRight
-                      << " T" << options_.visibleCropTop
-                      << " B" << options_.visibleCropBottom << "\n";
+                      << " shrink_border=L" << visibleCropLeft_.load()
+                      << " R" << visibleCropRight_.load()
+                      << " T" << visibleCropTop_.load()
+                      << " B" << visibleCropBottom_.load() << "\n";
             return false;
         }
         if (!rgaRgbToNv12(*fusedRgb, composite.width, composite.height, fusedNv12)) {
@@ -986,10 +1055,10 @@ private:
                 gpuParams.visibleWeight = visibleWeight;
                 gpuParams.visibleOffsetX = visiblePositionOffsetX_.load();
                 gpuParams.visibleOffsetY = visiblePositionOffsetY_.load();
-                gpuParams.visibleCropLeft = options_.visibleCropLeft;
-                gpuParams.visibleCropRight = options_.visibleCropRight;
-                gpuParams.visibleCropTop = options_.visibleCropTop;
-                gpuParams.visibleCropBottom = options_.visibleCropBottom;
+                gpuParams.visibleCropLeft = visibleCropLeft_.load();
+                gpuParams.visibleCropRight = visibleCropRight_.load();
+                gpuParams.visibleCropTop = visibleCropTop_.load();
+                gpuParams.visibleCropBottom = visibleCropBottom_.load();
                 gpuParams.enableBilinearResize = options_.gpuBilinearResize;
 
                 std::string gpuError;
@@ -1042,6 +1111,12 @@ private:
                           << " raw_diff_ms=" << rawDiffMs
                           << " visible_position_offset=" << visiblePositionOffsetX_.load()
                           << "," << visiblePositionOffsetY_.load()
+                          << " visible_shrink=" << (visibleCropLeft_.load() + visibleCropRight_.load())
+                          << "," << (visibleCropTop_.load() + visibleCropBottom_.load())
+                          << " border=L" << visibleCropLeft_.load()
+                          << " R" << visibleCropRight_.load()
+                          << " T" << visibleCropTop_.load()
+                          << " B" << visibleCropBottom_.load()
                           << " output=" << composite.width << "x" << composite.height << "\n";
             }
             if ((fusedFrames % (static_cast<std::uint64_t>(options_.fps) * 5)) == 0) {
@@ -1125,6 +1200,10 @@ private:
 
     std::atomic_int visiblePositionOffsetX_{0};
     std::atomic_int visiblePositionOffsetY_{0};
+    std::atomic_int visibleCropLeft_{4};
+    std::atomic_int visibleCropRight_{4};
+    std::atomic_int visibleCropTop_{3};
+    std::atomic_int visibleCropBottom_{3};
 
     LatestFrameStore visibleStore_;
     LatestFrameStore compositeStore_;
@@ -1146,6 +1225,12 @@ bool AppFusionPipeline::moveVisiblePositionOffset(int deltaX, int deltaY) {
 }
 std::pair<int, int> AppFusionPipeline::visiblePositionOffset() const {
     return impl_->visiblePositionOffset();
+}
+bool AppFusionPipeline::setVisibleShrinkPixels(int horizontalPixels, int verticalPixels) {
+    return impl_->setVisibleShrinkPixels(horizontalPixels, verticalPixels);
+}
+std::pair<int, int> AppFusionPipeline::visibleShrinkPixels() const {
+    return impl_->visibleShrinkPixels();
 }
 std::string AppFusionPipeline::lastError() const { return impl_->lastError(); }
 std::string AppFusionPipeline::description() const { return impl_->description(); }

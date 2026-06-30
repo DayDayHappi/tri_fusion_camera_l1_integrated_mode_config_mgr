@@ -13,6 +13,25 @@ using tri::protocol::private_api::PrivateWorkMode;
 using tri::protocol::private_api::toCommandName;
 using tri::protocol::private_api::toString;
 
+struct VisibleShrinkBorder {
+    int left = 0;
+    int right = 0;
+    int top = 0;
+    int bottom = 0;
+};
+
+VisibleShrinkBorder splitVisibleShrinkPixels(int horizontalPixels, int verticalPixels) {
+    if (horizontalPixels < 0) horizontalPixels = 0;
+    if (verticalPixels < 0) verticalPixels = 0;
+
+    VisibleShrinkBorder border;
+    border.left = horizontalPixels / 2;
+    border.right = horizontalPixels - border.left;
+    border.top = verticalPixels / 2;
+    border.bottom = verticalPixels - border.top;
+    return border;
+}
+
 bool isAppFusionMode(PrivateWorkMode mode) {
     return mode == PrivateWorkMode::VisibleLowlightFusion ||
            mode == PrivateWorkMode::VisibleThermalFusion ||
@@ -109,6 +128,25 @@ std::pair<int, int> PrivateVideoRuntime::appFusionVisiblePositionOffset() const 
     return {appFusionVisibleOffsetX_, appFusionVisibleOffsetY_};
 }
 
+bool PrivateVideoRuntime::setAppFusionVisibleShrinkPixels(int horizontalPixels, int verticalPixels) {
+    if (horizontalPixels < 0 || verticalPixels < 0) {
+        lastError_ = "visible shrink pixels must be non-negative";
+        return false;
+    }
+
+    appFusionVisibleShrinkHorizontal_ = horizontalPixels;
+    appFusionVisibleShrinkVertical_ = verticalPixels;
+
+    if (usingAppFusion_ && appFusionPipeline_.isRunning()) {
+        return appFusionPipeline_.setVisibleShrinkPixels(horizontalPixels, verticalPixels);
+    }
+    return true;
+}
+
+std::pair<int, int> PrivateVideoRuntime::appFusionVisibleShrinkPixels() const {
+    return {appFusionVisibleShrinkHorizontal_, appFusionVisibleShrinkVertical_};
+}
+
 bool PrivateVideoRuntime::startGstLaunchMode(PrivateWorkMode mode) {
     const std::string commandName = toCommandName(mode);
     const auto cfg = configManager_.configForModeCommand(commandName);
@@ -163,6 +201,14 @@ tri::media::app_fusion::AppFusionOptions PrivateVideoRuntime::buildAppFusionOpti
     opt.compositeAlpha = 0.35;
     opt.visibleOffsetX = appFusionVisibleOffsetX_;
     opt.visibleOffsetY = appFusionVisibleOffsetY_;
+
+    const auto border = splitVisibleShrinkPixels(appFusionVisibleShrinkHorizontal_,
+                                                 appFusionVisibleShrinkVertical_);
+    opt.visibleCropLeft = border.left;
+    opt.visibleCropRight = border.right;
+    opt.visibleCropTop = border.top;
+    opt.visibleCropBottom = border.bottom;
+
     opt.convertElement = "videoconvert";
     opt.verbose = false;
     return opt;
@@ -180,6 +226,8 @@ bool PrivateVideoRuntime::startAppFusionMode(PrivateWorkMode mode) {
               << " R" << opt.visibleCropRight
               << " T" << opt.visibleCropTop
               << " B" << opt.visibleCropBottom
+              << " horizontal=" << appFusionVisibleShrinkHorizontal_
+              << " vertical=" << appFusionVisibleShrinkVertical_
               << " visible_position_offset=" << opt.visibleOffsetX << "," << opt.visibleOffsetY
               << "\n";
 

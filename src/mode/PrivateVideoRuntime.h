@@ -32,6 +32,9 @@ public:
     bool moveAppFusionVisiblePositionOffset(int deltaX, int deltaY);
     std::pair<int, int> appFusionVisiblePositionOffset() const;
 
+    bool setAppFusionVisibleShrinkPixels(int horizontalPixels, int verticalPixels);
+    std::pair<int, int> appFusionVisibleShrinkPixels() const;
+
 private:
     bool startGstLaunchMode(tri::protocol::private_api::PrivateWorkMode mode);
     bool startAppFusionMode(tri::protocol::private_api::PrivateWorkMode mode);
@@ -47,6 +50,8 @@ private:
     bool usingAppFusion_{false};
     int appFusionVisibleOffsetX_{0};
     int appFusionVisibleOffsetY_{0};
+    int appFusionVisibleShrinkHorizontal_{8};
+    int appFusionVisibleShrinkVertical_{6};
     std::string lastError_;
     std::string activeDescription_;
 };

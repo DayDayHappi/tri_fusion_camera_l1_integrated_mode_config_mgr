@@ -64,6 +64,9 @@ struct CompositeControlCallbacks {
     std::function<PrivateHttpResult(int offsetX, int offsetY)> setVisiblePosition;
     std::function<PrivateHttpResult(const std::string& direction, int step)> moveVisiblePosition;
 
+    std::function<PrivateHttpResult()> queryVisibleShrink;
+    std::function<PrivateHttpResult(int horizontalPixels, int verticalPixels)> setVisibleShrink;
+
     // Must return a JSON object string, e.g. {"source":"cached",...}
     std::function<std::string()> currentCompositeStatusJson;
 };

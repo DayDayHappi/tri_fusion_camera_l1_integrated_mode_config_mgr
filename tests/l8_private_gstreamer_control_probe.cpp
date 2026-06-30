@@ -111,7 +111,9 @@ void printUsage(const char* program) {
         << "\nFusion visible-position APIs:\n"
         << "  /api/v1/fusion/visible_position\n"
         << "  /api/v1/fusion/visible_position/{x}/{y}\n"
-        << "  /api/v1/fusion/visible_position/move/{left|right|up|down}/{step}\n";
+        << "  /api/v1/fusion/visible_position/move/{left|right|up|down}/{step}\n"
+        << "  /api/v1/fusion/visible_shrink\n"
+        << "  /api/v1/fusion/visible_shrink/{horizontal}/{vertical}\n";
 }
 
 bool readValue(int& i, int argc, char** argv, std::string* out) {
@@ -931,6 +933,67 @@ int main(int argc, char** argv) {
                                        isVisibleFusionMode(currentMode)
                                            ? "visible position moved for current fusion stream"
                                            : "visible position saved and will apply when a fusion mode starts");
+    };
+
+    auto makeVisibleShrinkBody = [&](const std::string& action,
+                                    bool activeFusionMode,
+                                    const std::string& message) -> PrivateHttpResult {
+        const auto shrink = videoRuntime.appFusionVisibleShrinkPixels();
+        const int horizontal = shrink.first;
+        const int vertical = shrink.second;
+        const int left = horizontal / 2;
+        const int right = horizontal - left;
+        const int top = vertical / 2;
+        const int bottom = vertical - top;
+
+        std::ostringstream body;
+        body << "{\"ok\":true"
+             << ",\"action\":\"" << jsonEscape(action) << "\""
+             << ",\"visible_shrink\":{"
+             << "\"horizontal\":" << horizontal
+             << ",\"vertical\":" << vertical
+             << ",\"left\":" << left
+             << ",\"right\":" << right
+             << ",\"top\":" << top
+             << ",\"bottom\":" << bottom
+             << ",\"split_rule\":\"left=floor(horizontal/2),right=horizontal-left,top=floor(vertical/2),bottom=vertical-top\""
+             << ",\"effective_if_output_800x600\":{"
+             << "\"width\":" << (800 - horizontal)
+             << ",\"height\":" << (600 - vertical)
+             << "}"
+             << "}"
+             << ",\"active_fusion_mode\":" << (activeFusionMode ? "true" : "false")
+             << ",\"current_mode\":\"" << jsonEscape(toString(currentMode)) << "\""
+             << ",\"message\":\"" << jsonEscape(message) << "\""
+             << "}";
+        return jsonResult(body.str(), true);
+    };
+
+    compositeCallbacks.queryVisibleShrink = [&]() -> PrivateHttpResult {
+        std::lock_guard<std::mutex> lock(runtimeMutex);
+        return makeVisibleShrinkBody("query_visible_shrink",
+                                     isVisibleFusionMode(currentMode),
+                                     "visible shrink queried");
+    };
+
+    compositeCallbacks.setVisibleShrink = [&](int horizontalPixels, int verticalPixels) -> PrivateHttpResult {
+        if (horizontalPixels < 0 || horizontalPixels > 798 ||
+            verticalPixels < 0 || verticalPixels > 598) {
+            return errorJson("set_visible_shrink",
+                             "horizontal must be 0..798 and vertical must be 0..598 for 800x600 output");
+        }
+
+        std::lock_guard<std::mutex> lock(runtimeMutex);
+        if (!videoRuntime.setAppFusionVisibleShrinkPixels(horizontalPixels, verticalPixels)) {
+            return errorJson("set_visible_shrink",
+                             "failed to set visible shrink: " + videoRuntime.lastError());
+        }
+
+        return makeVisibleShrinkBody("set_visible_shrink",
+                                     isVisibleFusionMode(currentMode),
+                                     isVisibleFusionMode(currentMode)
+                                         ? "visible shrink updated for current fusion stream"
+                                         : "visible shrink saved and will apply when a fusion mode starts");
     };
 
     compositeCallbacks.queryConfig = [&]() -> PrivateHttpResult {

@@ -55,6 +55,13 @@ public:
     bool moveVisiblePositionOffset(int deltaX, int deltaY);
     std::pair<int, int> visiblePositionOffset() const;
 
+    // Runtime visible shrink size before fusion.
+    // horizontalPixels is total width compression, split to left/right border.
+    // verticalPixels is total height compression, split to top/bottom border.
+    // Example: horizontal=8 -> L=4,R=4; vertical=6 -> T=3,B=3.
+    bool setVisibleShrinkPixels(int horizontalPixels, int verticalPixels);
+    std::pair<int, int> visibleShrinkPixels() const;
+
     std::string lastError() const;
     std::string description() const;
 
