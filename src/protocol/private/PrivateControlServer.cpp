@@ -255,7 +255,7 @@ std::string PrivateControlServer::handleHttpRequest(const std::string& request) 
     }
 
     return httpJson(404, "Not Found",
-        "{\"ok\":false,\"error\":\"unknown api\",\"usage\":\"/api/v1/mode/{mode}, /api/v1/composite/fusion_color/{value}, /api/v1/composite/contour/{value}, /api/v1/composite/infrared_polarity/{value}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/zoom/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_position, /api/v1/fusion/visible_position/{x}/{y}, /api/v1/fusion/visible_position/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_shrink, /api/v1/fusion/visible_shrink/{horizontal}/{vertical}, /api/v1/fusion/visible_adjustment/save\"}");
+        "{\"ok\":false,\"error\":\"unknown api\",\"usage\":\"/api/v1/mode/{mode}, /api/v1/composite/fusion_color/{value}, /api/v1/composite/contour/{value}, /api/v1/composite/infrared_polarity/{value}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/zoom/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}, /api/v1/fusion/composite_position, /api/v1/fusion/composite_position/{x}/{y}, /api/v1/fusion/composite_position/move/{left|right|up|down}/{step}, /api/v1/fusion/composite_shrink, /api/v1/fusion/composite_shrink/{horizontal}/{vertical}, /api/v1/fusion/composite_adjustment/save\"}");
 }
 
 std::string PrivateControlServer::handleModeRequest(const std::string& method,
@@ -413,7 +413,7 @@ std::string PrivateControlServer::handleCompositeRequest(const std::string& meth
     }
 
     return httpJson(404, "Not Found",
-        "{\"ok\":false,\"error\":\"unknown composite api\",\"usage\":\"/api/v1/composite/fusion_color/{black_white|forest|snow|ocean|city|desert|default|7}, /api/v1/composite/contour/{off|red|green|blue|purple}, /api/v1/composite/infrared_polarity/{white_hot|black_hot}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/zoom/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_position, /api/v1/fusion/visible_position/{x}/{y}, /api/v1/fusion/visible_position/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_shrink, /api/v1/fusion/visible_shrink/{horizontal}/{vertical}, /api/v1/fusion/visible_adjustment/save\"}");
+        "{\"ok\":false,\"error\":\"unknown composite api\",\"usage\":\"/api/v1/composite/fusion_color/{black_white|forest|snow|ocean|city|desert|default|7}, /api/v1/composite/contour/{off|red|green|blue|purple}, /api/v1/composite/infrared_polarity/{white_hot|black_hot}, /api/v1/composite/query_config, /api/v1/composite/read_all_registers, /api/v1/composite/registration, /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}, /api/v1/composite/registration/{infrared|lowlight}/zoom/{value}, /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}, /api/v1/fusion/composite_position, /api/v1/fusion/composite_position/{x}/{y}, /api/v1/fusion/composite_position/move/{left|right|up|down}/{step}, /api/v1/fusion/composite_shrink, /api/v1/fusion/composite_shrink/{horizontal}/{vertical}, /api/v1/fusion/composite_adjustment/save\"}");
 }
 
 std::string PrivateControlServer::handleFusionRequest(const std::string& method,
@@ -422,133 +422,159 @@ std::string PrivateControlServer::handleFusionRequest(const std::string& method,
         return httpJson(405, "Method Not Allowed", "{\"ok\":false,\"error\":\"method must be POST or GET\"}");
     }
 
-    if (path == "visible_position" || path == "visible_offset") {
-        return invokeCompositeCallback(compositeCallbacks_.queryVisiblePosition,
-                                       "query_visible_position callback is not installed");
+    if (path == "composite_position" || path == "composite_offset") {
+        return invokeCompositeCallback(compositeCallbacks_.queryCompositePosition,
+                                       "query_composite_position callback is not installed");
     }
 
-    if (path == "visible_shrink" || path == "visible_resize" || path == "visible_border") {
-        return invokeCompositeCallback(compositeCallbacks_.queryVisibleShrink,
-                                       "query_visible_shrink callback is not installed");
+    if (path == "composite_shrink" || path == "composite_resize" || path == "composite_border") {
+        return invokeCompositeCallback(compositeCallbacks_.queryCompositeShrink,
+                                       "query_composite_shrink callback is not installed");
     }
 
-    if (path == "visible_adjustment/save" ||
-        path == "visible_save" ||
+    if (path == "composite_adjustment/save" ||
+        path == "composite_save" ||
+        path == "save_composite_adjustment") {
+        return invokeCompositeCallback(compositeCallbacks_.saveCompositeAdjustment,
+                                       "save_composite_adjustment callback is not installed");
+    }
+
+    // Old visible adjustment APIs are intentionally not mapped to the new behavior.
+    // Visible is now the reference frame; use composite_position/composite_shrink instead.
+    if (path == "visible_position" || path == "visible_offset" ||
+        path == "visible_shrink" || path == "visible_resize" || path == "visible_border" ||
+        path == "visible_adjustment/save" || path == "visible_save" ||
         path == "save_visible_adjustment") {
-        return invokeCompositeCallback(compositeCallbacks_.saveVisibleAdjustment,
-                                       "save_visible_adjustment callback is not installed");
+        return httpJson(200, "OK",
+            "{\"ok\":false,\"error\":\"visible adjustment is disabled because visible is now the reference frame; use composite_position/composite_shrink/composite_adjustment/save\"}");
     }
 
+    constexpr const char* compositePositionPrefix = "composite_position/";
+    constexpr const char* compositeOffsetPrefix = "composite_offset/";
+    constexpr const char* compositeShrinkPrefix = "composite_shrink/";
+    constexpr const char* compositeResizePrefix = "composite_resize/";
+    constexpr const char* compositeBorderPrefix = "composite_border/";
+
+    // Also catch old visible-prefix control paths with a clear message.
     constexpr const char* visiblePositionPrefix = "visible_position/";
     constexpr const char* visibleOffsetPrefix = "visible_offset/";
     constexpr const char* visibleShrinkPrefix = "visible_shrink/";
     constexpr const char* visibleResizePrefix = "visible_resize/";
     constexpr const char* visibleBorderPrefix = "visible_border/";
 
+    if (path.rfind(visiblePositionPrefix, 0) == 0 ||
+        path.rfind(visibleOffsetPrefix, 0) == 0 ||
+        path.rfind(visibleShrinkPrefix, 0) == 0 ||
+        path.rfind(visibleResizePrefix, 0) == 0 ||
+        path.rfind(visibleBorderPrefix, 0) == 0) {
+        return httpJson(200, "OK",
+            "{\"ok\":false,\"error\":\"visible adjustment is disabled because visible is now the reference frame; use composite_position/composite_shrink\"}");
+    }
+
     std::string rest;
     bool isPositionPath = false;
     bool isShrinkPath = false;
 
-    if (path.rfind(visiblePositionPrefix, 0) == 0) {
-        rest = path.substr(std::strlen(visiblePositionPrefix));
+    if (path.rfind(compositePositionPrefix, 0) == 0) {
+        rest = path.substr(std::strlen(compositePositionPrefix));
         isPositionPath = true;
-    } else if (path.rfind(visibleOffsetPrefix, 0) == 0) {
-        rest = path.substr(std::strlen(visibleOffsetPrefix));
+    } else if (path.rfind(compositeOffsetPrefix, 0) == 0) {
+        rest = path.substr(std::strlen(compositeOffsetPrefix));
         isPositionPath = true;
-    } else if (path.rfind(visibleShrinkPrefix, 0) == 0) {
-        rest = path.substr(std::strlen(visibleShrinkPrefix));
+    } else if (path.rfind(compositeShrinkPrefix, 0) == 0) {
+        rest = path.substr(std::strlen(compositeShrinkPrefix));
         isShrinkPath = true;
-    } else if (path.rfind(visibleResizePrefix, 0) == 0) {
-        rest = path.substr(std::strlen(visibleResizePrefix));
+    } else if (path.rfind(compositeResizePrefix, 0) == 0) {
+        rest = path.substr(std::strlen(compositeResizePrefix));
         isShrinkPath = true;
-    } else if (path.rfind(visibleBorderPrefix, 0) == 0) {
-        rest = path.substr(std::strlen(visibleBorderPrefix));
+    } else if (path.rfind(compositeBorderPrefix, 0) == 0) {
+        rest = path.substr(std::strlen(compositeBorderPrefix));
         isShrinkPath = true;
     } else {
         return httpJson(404, "Not Found",
-            "{\"ok\":false,\"error\":\"unknown fusion api\",\"usage\":\"/api/v1/fusion/visible_position, /api/v1/fusion/visible_position/{x}/{y}, /api/v1/fusion/visible_position/move/{left|right|up|down}/{step}, /api/v1/fusion/visible_shrink, /api/v1/fusion/visible_shrink/{horizontal}/{vertical}, /api/v1/fusion/visible_adjustment/save\"}");
+            "{\"ok\":false,\"error\":\"unknown fusion api\",\"usage\":\"/api/v1/fusion/composite_position, /api/v1/fusion/composite_position/{x}/{y}, /api/v1/fusion/composite_position/move/{left|right|up|down}/{step}, /api/v1/fusion/composite_shrink, /api/v1/fusion/composite_shrink/{horizontal}/{vertical}, /api/v1/fusion/composite_adjustment/save\"}");
     }
 
     const auto parts = splitPath(rest);
 
     if (isShrinkPath) {
-        // visible_shrink/{horizontal_pixels}/{vertical_pixels}
-        // horizontal_pixels is total width compression, split to left/right.
-        // vertical_pixels is total height compression, split to top/bottom.
+        // composite_shrink/{horizontal_pixels}/{vertical_pixels}
+        // horizontal_pixels is total width compression in visible/output coordinates.
+        // vertical_pixels is total height compression in visible/output coordinates.
         if (parts.size() == 2) {
             int horizontal = 0;
             int vertical = 0;
             if (!parseStrictInt(parts[0], &horizontal) || !parseStrictInt(parts[1], &vertical)) {
                 return httpJson(400, "Bad Request",
-                    "{\"ok\":false,\"action\":\"set_visible_shrink\",\"error\":\"horizontal and vertical must be integers\"}");
+                    "{\"ok\":false,\"action\":\"set_composite_shrink\",\"error\":\"horizontal and vertical must be integers\"}");
             }
-            if (!compositeCallbacks_.setVisibleShrink) {
+            if (!compositeCallbacks_.setCompositeShrink) {
                 return httpJson(200, "OK",
-                    "{\"ok\":false,\"error\":\"set_visible_shrink callback is not installed\"}");
+                    "{\"ok\":false,\"error\":\"set_composite_shrink callback is not installed\"}");
             }
             try {
-                const auto ret = compositeCallbacks_.setVisibleShrink(horizontal, vertical);
+                const auto ret = compositeCallbacks_.setCompositeShrink(horizontal, vertical);
                 return httpJson(ret.statusCode, ret.statusText,
                     ret.bodyJson.empty() ? "{\"ok\":false,\"error\":\"empty callback response\"}" : ret.bodyJson);
             } catch (const std::exception& e) {
                 return httpJson(200, "OK",
-                    std::string("{\"ok\":false,\"error\":\"visible shrink callback exception: ") +
+                    std::string("{\"ok\":false,\"error\":\"composite shrink callback exception: ") +
                     jsonEscape(e.what()) + "\"}");
             }
         }
 
         return httpJson(400, "Bad Request",
-            "{\"ok\":false,\"error\":\"invalid visible shrink path\",\"usage\":\"visible_shrink/{horizontal_pixels}/{vertical_pixels}\"}");
+            "{\"ok\":false,\"error\":\"invalid composite shrink path\",\"usage\":\"composite_shrink/{horizontal_pixels}/{vertical_pixels}\"}");
     }
 
     if (isPositionPath) {
-        // visible_position/{x}/{y}
+        // composite_position/{x}/{y}
         if (parts.size() == 2) {
             int x = 0;
             int y = 0;
             if (!parseStrictInt(parts[0], &x) || !parseStrictInt(parts[1], &y)) {
                 return httpJson(400, "Bad Request",
-                    "{\"ok\":false,\"action\":\"set_visible_position\",\"error\":\"x and y must be integers\"}");
+                    "{\"ok\":false,\"action\":\"set_composite_position\",\"error\":\"x and y must be integers\"}");
             }
-            if (!compositeCallbacks_.setVisiblePosition) {
+            if (!compositeCallbacks_.setCompositePosition) {
                 return httpJson(200, "OK",
-                    "{\"ok\":false,\"error\":\"set_visible_position callback is not installed\"}");
+                    "{\"ok\":false,\"error\":\"set_composite_position callback is not installed\"}");
             }
             try {
-                const auto ret = compositeCallbacks_.setVisiblePosition(x, y);
+                const auto ret = compositeCallbacks_.setCompositePosition(x, y);
                 return httpJson(ret.statusCode, ret.statusText,
                     ret.bodyJson.empty() ? "{\"ok\":false,\"error\":\"empty callback response\"}" : ret.bodyJson);
             } catch (const std::exception& e) {
                 return httpJson(200, "OK",
-                    std::string("{\"ok\":false,\"error\":\"visible position callback exception: ") +
+                    std::string("{\"ok\":false,\"error\":\"composite position callback exception: ") +
                     jsonEscape(e.what()) + "\"}");
             }
         }
 
-        // visible_position/move/{left|right|up|down}/{step}
+        // composite_position/move/{left|right|up|down}/{step}
         if (parts.size() == 3 && parts[0] == "move") {
             int step = 0;
             if (!parseStrictInt(parts[2], &step) || step <= 0 || step > 4096) {
                 return httpJson(400, "Bad Request",
-                    "{\"ok\":false,\"action\":\"move_visible_position\",\"error\":\"step must be an integer in range 1..4096\"}");
+                    "{\"ok\":false,\"action\":\"move_composite_position\",\"error\":\"step must be an integer in range 1..4096\"}");
             }
-            if (!compositeCallbacks_.moveVisiblePosition) {
+            if (!compositeCallbacks_.moveCompositePosition) {
                 return httpJson(200, "OK",
-                    "{\"ok\":false,\"error\":\"move_visible_position callback is not installed\"}");
+                    "{\"ok\":false,\"error\":\"move_composite_position callback is not installed\"}");
             }
             try {
-                const auto ret = compositeCallbacks_.moveVisiblePosition(parts[1], step);
+                const auto ret = compositeCallbacks_.moveCompositePosition(parts[1], step);
                 return httpJson(ret.statusCode, ret.statusText,
                     ret.bodyJson.empty() ? "{\"ok\":false,\"error\":\"empty callback response\"}" : ret.bodyJson);
             } catch (const std::exception& e) {
                 return httpJson(200, "OK",
-                    std::string("{\"ok\":false,\"error\":\"visible position callback exception: ") +
+                    std::string("{\"ok\":false,\"error\":\"composite position callback exception: ") +
                     jsonEscape(e.what()) + "\"}");
             }
         }
 
         return httpJson(400, "Bad Request",
-            "{\"ok\":false,\"error\":\"invalid visible position path\",\"usage\":\"visible_position/{x}/{y} or visible_position/move/{left|right|up|down}/{step}\"}");
+            "{\"ok\":false,\"error\":\"invalid composite position path\",\"usage\":\"composite_position/{x}/{y} or composite_position/move/{left|right|up|down}/{step}\"}");
     }
 
     return httpJson(404, "Not Found",
@@ -592,12 +618,12 @@ std::string PrivateControlServer::handleStatusRequest() {
          << "\"/api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\""
          << "],"
          << "\"fusion_api\":["
-         << "\"/api/v1/fusion/visible_position\","
-         << "\"/api/v1/fusion/visible_position/{x}/{y}\","
-         << "\"/api/v1/fusion/visible_position/move/{left|right|up|down}/{step}\","
-         << "\"/api/v1/fusion/visible_shrink\","
-         << "\"/api/v1/fusion/visible_shrink/{horizontal}/{vertical}\","
-         << "\"/api/v1/fusion/visible_adjustment/save\""
+         << "\"/api/v1/fusion/composite_position\","
+         << "\"/api/v1/fusion/composite_position/{x}/{y}\","
+         << "\"/api/v1/fusion/composite_position/move/{left|right|up|down}/{step}\","
+         << "\"/api/v1/fusion/composite_shrink\","
+         << "\"/api/v1/fusion/composite_shrink/{horizontal}/{vertical}\","
+         << "\"/api/v1/fusion/composite_adjustment/save\""
          << "]"
          << "}";
     return httpJson(200, "OK", body.str());

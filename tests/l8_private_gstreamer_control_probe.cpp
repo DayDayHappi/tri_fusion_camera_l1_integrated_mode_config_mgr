@@ -108,12 +108,12 @@ void printUsage(const char* program) {
         << "  /api/v1/composite/registration/{infrared|lowlight}/{x|y}/{value}\n"
         << "  /api/v1/composite/registration/{infrared|lowlight}/zoom/{value}\n"
         << "  /api/v1/composite/registration/{infrared|lowlight}/move/{left|right|up|down}/{step}\n"
-        << "\nFusion visible-position APIs:\n"
-        << "  /api/v1/fusion/visible_position\n"
-        << "  /api/v1/fusion/visible_position/{x}/{y}\n"
-        << "  /api/v1/fusion/visible_position/move/{left|right|up|down}/{step}\n"
-        << "  /api/v1/fusion/visible_shrink\n"
-        << "  /api/v1/fusion/visible_shrink/{horizontal}/{vertical}\n";
+        << "\nFusion composite-position APIs:\n"
+        << "  /api/v1/fusion/composite_position\n"
+        << "  /api/v1/fusion/composite_position/{x}/{y}\n"
+        << "  /api/v1/fusion/composite_position/move/{left|right|up|down}/{step}\n"
+        << "  /api/v1/fusion/composite_shrink\n"
+        << "  /api/v1/fusion/composite_shrink/{horizontal}/{vertical}\n";
 }
 
 bool readValue(int& i, int argc, char** argv, std::string* out) {
@@ -181,9 +181,9 @@ std::string joinPath(const std::string& dir, const std::string& name) {
     return dir + "/" + name;
 }
 
-std::string fusionVisibleAdjustmentPath(const tri::media::gstreamer::GStreamerConfigManagerOptions& options) {
+std::string fusionCompositeAdjustmentPath(const tri::media::gstreamer::GStreamerConfigManagerOptions& options) {
     return joinPath(options.configDir.empty() ? std::string("./configs") : options.configDir,
-                    "fusion_visible_adjustment.conf");
+                    "fusion_composite_adjustment.conf");
 }
 
 bool parseArgs(int argc,
@@ -354,9 +354,9 @@ int main(int argc, char** argv) {
 
     PrivateWorkMode currentMode = PrivateWorkMode::LowlightThermalComposite;
     PrivateVideoRuntime videoRuntime(gstConfigMgr);
-    const std::string visibleAdjustmentPath = fusionVisibleAdjustmentPath(gstMgrOptions);
-    if (!videoRuntime.loadAppFusionVisibleAdjustment(visibleAdjustmentPath)) {
-        std::cerr << "[WARN] failed to load visible fusion adjustment: "
+    const std::string compositeAdjustmentPath = fusionCompositeAdjustmentPath(gstMgrOptions);
+    if (!videoRuntime.loadAppFusionCompositeAdjustment(compositeAdjustmentPath)) {
+        std::cerr << "[WARN] failed to load composite fusion adjustment: "
                   << videoRuntime.lastError() << "\n";
     }
     CompositeSensorController compositeController;
@@ -878,17 +878,17 @@ int main(int argc, char** argv) {
         return jsonResult(body.str(), true);
     };
 
-    auto makeVisiblePositionBody = [&](const std::string& action,
+    auto makeCompositePositionBody = [&](const std::string& action,
                                       bool activeFusionMode,
                                       const std::string& message) -> PrivateHttpResult {
-        const auto pos = videoRuntime.appFusionVisiblePositionOffset();
+        const auto pos = videoRuntime.appFusionCompositePositionOffset();
         std::ostringstream body;
         body << "{\"ok\":true"
              << ",\"action\":\"" << jsonEscape(action) << "\""
-             << ",\"visible_position\":{"
+             << ",\"composite_position\":{"
              << "\"x\":" << pos.first
              << ",\"y\":" << pos.second
-             << ",\"direction_rule\":\"positive_x_moves_visible_right_positive_y_moves_visible_down\""
+             << ",\"direction_rule\":\"positive_x_moves_composite_right_positive_y_moves_composite_down\""
              << "}"
              << ",\"active_fusion_mode\":" << (activeFusionMode ? "true" : "false")
              << ",\"current_mode\":\"" << jsonEscape(toString(currentMode)) << "\""
@@ -897,31 +897,31 @@ int main(int argc, char** argv) {
         return jsonResult(body.str(), true);
     };
 
-    compositeCallbacks.queryVisiblePosition = [&]() -> PrivateHttpResult {
+    compositeCallbacks.queryCompositePosition = [&]() -> PrivateHttpResult {
         std::lock_guard<std::mutex> lock(runtimeMutex);
-        return makeVisiblePositionBody("query_visible_position",
+        return makeCompositePositionBody("query_composite_position",
                                        isVisibleFusionMode(currentMode),
-                                       "visible position queried");
+                                       "composite position queried");
     };
 
-    compositeCallbacks.setVisiblePosition = [&](int offsetX, int offsetY) -> PrivateHttpResult {
+    compositeCallbacks.setCompositePosition = [&](int offsetX, int offsetY) -> PrivateHttpResult {
         if (offsetX < -4096 || offsetX > 4096 || offsetY < -4096 || offsetY > 4096) {
-            return errorJson("set_visible_position", "x and y must be in range -4096..4096");
+            return errorJson("set_composite_position", "x and y must be in range -4096..4096");
         }
         std::lock_guard<std::mutex> lock(runtimeMutex);
-        if (!videoRuntime.setAppFusionVisiblePositionOffset(offsetX, offsetY)) {
-            return errorJson("set_visible_position", "failed to set visible position: " + videoRuntime.lastError());
+        if (!videoRuntime.setAppFusionCompositePositionOffset(offsetX, offsetY)) {
+            return errorJson("set_composite_position", "failed to set composite position: " + videoRuntime.lastError());
         }
-        return makeVisiblePositionBody("set_visible_position",
+        return makeCompositePositionBody("set_composite_position",
                                        isVisibleFusionMode(currentMode),
                                        isVisibleFusionMode(currentMode)
-                                           ? "visible position updated for current fusion stream"
-                                           : "visible position saved and will apply when a fusion mode starts");
+                                           ? "composite position updated for current fusion stream"
+                                           : "composite position saved and will apply when a fusion mode starts");
     };
 
-    compositeCallbacks.moveVisiblePosition = [&](const std::string& direction, int step) -> PrivateHttpResult {
+    compositeCallbacks.moveCompositePosition = [&](const std::string& direction, int step) -> PrivateHttpResult {
         if (step <= 0 || step > 4096) {
-            return errorJson("move_visible_position", "step must be in range 1..4096");
+            return errorJson("move_composite_position", "step must be in range 1..4096");
         }
 
         int dx = 0;
@@ -931,30 +931,30 @@ int main(int argc, char** argv) {
         else if (direction == "up") dy = -step;
         else if (direction == "down") dy = step;
         else {
-            return errorJson("move_visible_position", "direction must be left, right, up or down");
+            return errorJson("move_composite_position", "direction must be left, right, up or down");
         }
 
         std::lock_guard<std::mutex> lock(runtimeMutex);
-        const auto oldPos = videoRuntime.appFusionVisiblePositionOffset();
+        const auto oldPos = videoRuntime.appFusionCompositePositionOffset();
         const int newX = oldPos.first + dx;
         const int newY = oldPos.second + dy;
         if (newX < -4096 || newX > 4096 || newY < -4096 || newY > 4096) {
-            return errorJson("move_visible_position", "new visible position would exceed range -4096..4096");
+            return errorJson("move_composite_position", "new composite position would exceed range -4096..4096");
         }
-        if (!videoRuntime.moveAppFusionVisiblePositionOffset(dx, dy)) {
-            return errorJson("move_visible_position", "failed to move visible position: " + videoRuntime.lastError());
+        if (!videoRuntime.moveAppFusionCompositePositionOffset(dx, dy)) {
+            return errorJson("move_composite_position", "failed to move composite position: " + videoRuntime.lastError());
         }
-        return makeVisiblePositionBody("move_visible_position",
+        return makeCompositePositionBody("move_composite_position",
                                        isVisibleFusionMode(currentMode),
                                        isVisibleFusionMode(currentMode)
-                                           ? "visible position moved for current fusion stream"
-                                           : "visible position saved and will apply when a fusion mode starts");
+                                           ? "composite position moved for current fusion stream"
+                                           : "composite position saved and will apply when a fusion mode starts");
     };
 
-    auto makeVisibleShrinkBody = [&](const std::string& action,
+    auto makeCompositeShrinkBody = [&](const std::string& action,
                                     bool activeFusionMode,
                                     const std::string& message) -> PrivateHttpResult {
-        const auto shrink = videoRuntime.appFusionVisibleShrinkPixels();
+        const auto shrink = videoRuntime.appFusionCompositeShrinkPixels();
         const int horizontal = shrink.first;
         const int vertical = shrink.second;
         const int left = horizontal / 2;
@@ -965,7 +965,7 @@ int main(int argc, char** argv) {
         std::ostringstream body;
         body << "{\"ok\":true"
              << ",\"action\":\"" << jsonEscape(action) << "\""
-             << ",\"visible_shrink\":{"
+             << ",\"composite_shrink\":{"
              << "\"horizontal\":" << horizontal
              << ",\"vertical\":" << vertical
              << ",\"left\":" << left
@@ -973,9 +973,9 @@ int main(int argc, char** argv) {
              << ",\"top\":" << top
              << ",\"bottom\":" << bottom
              << ",\"split_rule\":\"left=floor(horizontal/2),right=horizontal-left,top=floor(vertical/2),bottom=vertical-top\""
-             << ",\"effective_if_output_800x600\":{"
-             << "\"width\":" << (800 - horizontal)
-             << ",\"height\":" << (600 - vertical)
+             << ",\"effective_if_output_1600x1200\":{"
+             << "\"width\":" << (1600 - horizontal)
+             << ",\"height\":" << (1200 - vertical)
              << "}"
              << "}"
              << ",\"active_fusion_mode\":" << (activeFusionMode ? "true" : "false")
@@ -985,38 +985,38 @@ int main(int argc, char** argv) {
         return jsonResult(body.str(), true);
     };
 
-    compositeCallbacks.queryVisibleShrink = [&]() -> PrivateHttpResult {
+    compositeCallbacks.queryCompositeShrink = [&]() -> PrivateHttpResult {
         std::lock_guard<std::mutex> lock(runtimeMutex);
-        return makeVisibleShrinkBody("query_visible_shrink",
+        return makeCompositeShrinkBody("query_composite_shrink",
                                      isVisibleFusionMode(currentMode),
-                                     "visible shrink queried");
+                                     "composite shrink queried");
     };
 
-    compositeCallbacks.setVisibleShrink = [&](int horizontalPixels, int verticalPixels) -> PrivateHttpResult {
-        if (horizontalPixels < 0 || horizontalPixels > 798 ||
-            verticalPixels < 0 || verticalPixels > 598) {
-            return errorJson("set_visible_shrink",
-                             "horizontal must be 0..798 and vertical must be 0..598 for 800x600 output");
+    compositeCallbacks.setCompositeShrink = [&](int horizontalPixels, int verticalPixels) -> PrivateHttpResult {
+        if (horizontalPixels < 0 || horizontalPixels > 1598 ||
+            verticalPixels < 0 || verticalPixels > 1198) {
+            return errorJson("set_composite_shrink",
+                             "horizontal must be 0..1598 and vertical must be 0..1198 for 1600x1200 output");
         }
 
         std::lock_guard<std::mutex> lock(runtimeMutex);
-        if (!videoRuntime.setAppFusionVisibleShrinkPixels(horizontalPixels, verticalPixels)) {
-            return errorJson("set_visible_shrink",
-                             "failed to set visible shrink: " + videoRuntime.lastError());
+        if (!videoRuntime.setAppFusionCompositeShrinkPixels(horizontalPixels, verticalPixels)) {
+            return errorJson("set_composite_shrink",
+                             "failed to set composite shrink: " + videoRuntime.lastError());
         }
 
-        return makeVisibleShrinkBody("set_visible_shrink",
+        return makeCompositeShrinkBody("set_composite_shrink",
                                      isVisibleFusionMode(currentMode),
                                      isVisibleFusionMode(currentMode)
-                                         ? "visible shrink updated for current fusion stream"
-                                         : "visible shrink saved and will apply when a fusion mode starts");
+                                         ? "composite shrink updated for current fusion stream"
+                                         : "composite shrink saved and will apply when a fusion mode starts");
     };
 
-    compositeCallbacks.saveVisibleAdjustment = [&]() -> PrivateHttpResult {
+    compositeCallbacks.saveCompositeAdjustment = [&]() -> PrivateHttpResult {
         std::lock_guard<std::mutex> lock(runtimeMutex);
 
-        const auto pos = videoRuntime.appFusionVisiblePositionOffset();
-        const auto shrink = videoRuntime.appFusionVisibleShrinkPixels();
+        const auto pos = videoRuntime.appFusionCompositePositionOffset();
+        const auto shrink = videoRuntime.appFusionCompositeShrinkPixels();
         const int horizontal = shrink.first;
         const int vertical = shrink.second;
         const int left = horizontal / 2;
@@ -1024,21 +1024,21 @@ int main(int argc, char** argv) {
         const int top = vertical / 2;
         const int bottom = vertical - top;
 
-        if (!videoRuntime.saveAppFusionVisibleAdjustment(visibleAdjustmentPath)) {
-            return errorJson("save_visible_adjustment",
-                             "failed to save visible adjustment: " + videoRuntime.lastError());
+        if (!videoRuntime.saveAppFusionCompositeAdjustment(compositeAdjustmentPath)) {
+            return errorJson("save_composite_adjustment",
+                             "failed to save composite adjustment: " + videoRuntime.lastError());
         }
 
         std::ostringstream body;
         body << std::fixed << std::setprecision(6)
              << "{\"ok\":true"
-             << ",\"action\":\"save_visible_adjustment\""
-             << ",\"path\":\"" << jsonEscape(visibleAdjustmentPath) << "\""
-             << ",\"visible_position\":{"
+             << ",\"action\":\"save_composite_adjustment\""
+             << ",\"path\":\"" << jsonEscape(compositeAdjustmentPath) << "\""
+             << ",\"composite_position\":{"
              << "\"x\":" << pos.first
              << ",\"y\":" << pos.second
              << "}"
-             << ",\"visible_shrink\":{"
+             << ",\"composite_shrink\":{"
              << "\"horizontal\":" << horizontal
              << ",\"vertical\":" << vertical
              << ",\"left\":" << left
@@ -1046,11 +1046,11 @@ int main(int argc, char** argv) {
              << ",\"top\":" << top
              << ",\"bottom\":" << bottom
              << "}"
-             << ",\"scale_ratio_if_output_800x600\":{"
-             << "\"x\":" << (800.0 - static_cast<double>(horizontal)) / 800.0
-             << ",\"y\":" << (600.0 - static_cast<double>(vertical)) / 600.0
+             << ",\"scale_ratio_if_output_1600x1200\":{"
+             << "\"x\":" << (1600.0 - static_cast<double>(horizontal)) / 1600.0
+             << ",\"y\":" << (1200.0 - static_cast<double>(vertical)) / 1200.0
              << "}"
-             << ",\"message\":\"current visible position and shrink settings saved; they will be loaded on next startup\""
+             << ",\"message\":\"current composite position and shrink settings saved; they will be loaded on next startup\""
              << "}";
         return jsonResult(body.str(), true);
     };

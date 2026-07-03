@@ -145,50 +145,42 @@ inline uchar clamp_u8_gpu(int v) {
     return (uchar)(v < 0 ? 0 : (v > 255 ? 255 : v));
 }
 
-inline void fused_rgb_at_gpu(__global const uchar* visible_rgb,
-                             __global const uchar* composite_rgb,
-                             int visible_w,
-                             int visible_h,
-                             int out_w,
-                             int out_h,
-                             float visible_weight,
-                             int visible_offset_x,
-                             int visible_offset_y,
-                             int crop_left,
-                             int crop_right,
-                             int crop_top,
-                             int crop_bottom,
-                             int x,
-                             int y,
-                             int* out_r,
-                             int* out_g,
-                             int* out_b) {
-    const int ci = (y * out_w + x) * 3;
-
-    const int cr = (int)composite_rgb[ci + 0];
-    const int cg = (int)composite_rgb[ci + 1];
-    const int cb = (int)composite_rgb[ci + 2];
-
-    const float vw = clamp((float)visible_weight, 0.0f, 1.0f);
-    const float cw = 1.0f - vw;
-
-    // Shrink-and-black-border mode with runtime placement offset:
-    // Visible input keeps its original size, for example 800x600.
-    // The full visible image is compressed into an inner rectangle whose size is:
-    //   inner_w = out_w - crop_left - crop_right
-    //   inner_h = out_h - crop_top  - crop_bottom
-    // The rectangle is placed at:
-    //   x0 = crop_left + visible_offset_x
-    //   y0 = crop_top  + visible_offset_y
-    // Positive visible_offset_x moves the visible image right.
-    // Positive visible_offset_y moves the visible image down.
-    // Pixels outside the placed rectangle use black visible pixels (0,0,0), then fuse normally.
-    if (visible_w <= 0 || visible_h <= 0 || out_w <= 0 || out_h <= 0) {
-        *out_r = clamp_int_gpu((int)((float)cr * cw), 0, 255);
-        *out_g = clamp_int_gpu((int)((float)cg * cw), 0, 255);
-        *out_b = clamp_int_gpu((int)((float)cb * cw), 0, 255);
+inline void fused_rgb_visible_reference_at_gpu(__global const uchar* visible_rgb,
+                                                __global const uchar* composite_rgb,
+                                                int visible_w,
+                                                int visible_h,
+                                                int composite_w,
+                                                int composite_h,
+                                                int out_w,
+                                                int out_h,
+                                                float visible_weight,
+                                                int composite_offset_x,
+                                                int composite_offset_y,
+                                                int crop_left,
+                                                int crop_right,
+                                                int crop_top,
+                                                int crop_bottom,
+                                                int x,
+                                                int y,
+                                                int* out_r,
+                                                int* out_g,
+                                                int* out_b) {
+    if (visible_w <= 0 || visible_h <= 0 || composite_w <= 0 || composite_h <= 0 || out_w <= 0 || out_h <= 0) {
+        *out_r = 0;
+        *out_g = 0;
+        *out_b = 0;
         return;
     }
+
+    int vx = (int)(((long)x * (long)visible_w) / (long)out_w);
+    int vy = (int)(((long)y * (long)visible_h) / (long)out_h);
+    vx = clamp_int_gpu(vx, 0, visible_w - 1);
+    vy = clamp_int_gpu(vy, 0, visible_h - 1);
+
+    const int vi = (vy * visible_w + vx) * 3;
+    const int vr = (int)visible_rgb[vi + 0];
+    const int vg = (int)visible_rgb[vi + 1];
+    const int vb = (int)visible_rgb[vi + 2];
 
     crop_left = clamp_int_gpu(crop_left, 0, out_w - 1);
     crop_right = clamp_int_gpu(crop_right, 0, out_w - 1);
@@ -197,35 +189,41 @@ inline void fused_rgb_at_gpu(__global const uchar* visible_rgb,
 
     const int dst_w = out_w - crop_left - crop_right;
     const int dst_h = out_h - crop_top - crop_bottom;
-    const int dst_x0 = crop_left + visible_offset_x;
-    const int dst_y0 = crop_top + visible_offset_y;
+    const int dst_x0 = crop_left + composite_offset_x;
+    const int dst_y0 = crop_top + composite_offset_y;
     const int dst_x1 = dst_x0 + dst_w - 1;
     const int dst_y1 = dst_y0 + dst_h - 1;
 
-    int vr = 0;
-    int vg = 0;
-    int vb = 0;
-
-    if (dst_w > 0 && dst_h > 0 &&
-        x >= dst_x0 && x <= dst_x1 &&
-        y >= dst_y0 && y <= dst_y1) {
-        const int local_x = x - dst_x0;
-        const int local_y = y - dst_y0;
-
-        int vx = (int)(((long)local_x * (long)visible_w) / (long)dst_w);
-        int vy = (int)(((long)local_y * (long)visible_h) / (long)dst_h);
-        vx = clamp_int_gpu(vx, 0, visible_w - 1);
-        vy = clamp_int_gpu(vy, 0, visible_h - 1);
-
-        const int vi = (vy * visible_w + vx) * 3;
-        vr = (int)visible_rgb[vi + 0];
-        vg = (int)visible_rgb[vi + 1];
-        vb = (int)visible_rgb[vi + 2];
+    // Visible is the reference frame. Outside the composite placement rectangle,
+    // keep the visible pixel unchanged instead of darkening the border.
+    if (dst_w <= 0 || dst_h <= 0 ||
+        x < dst_x0 || x > dst_x1 ||
+        y < dst_y0 || y > dst_y1) {
+        *out_r = clamp_int_gpu(vr, 0, 255);
+        *out_g = clamp_int_gpu(vg, 0, 255);
+        *out_b = clamp_int_gpu(vb, 0, 255);
+        return;
     }
 
-    int r = (int)((float)vr * vw + (float)cr * cw);
-    int g = (int)((float)vg * vw + (float)cg * cw);
-    int b = (int)((float)vb * vw + (float)cb * cw);
+    const int local_x = x - dst_x0;
+    const int local_y = y - dst_y0;
+
+    int cx = (int)(((long)local_x * (long)composite_w) / (long)dst_w);
+    int cy = (int)(((long)local_y * (long)composite_h) / (long)dst_h);
+    cx = clamp_int_gpu(cx, 0, composite_w - 1);
+    cy = clamp_int_gpu(cy, 0, composite_h - 1);
+
+    const int ci = (cy * composite_w + cx) * 3;
+    const int cr = (int)composite_rgb[ci + 0];
+    const int cg = (int)composite_rgb[ci + 1];
+    const int cb = (int)composite_rgb[ci + 2];
+
+    const float vw = clamp((float)visible_weight, 0.0f, 1.0f);
+    const float cw = 1.0f - vw;
+
+    const int r = (int)((float)vr * vw + (float)cr * cw);
+    const int g = (int)((float)vg * vw + (float)cg * cw);
+    const int b = (int)((float)vb * vw + (float)cb * cw);
 
     *out_r = clamp_int_gpu(r, 0, 255);
     *out_g = clamp_int_gpu(g, 0, 255);
@@ -237,11 +235,13 @@ __kernel void fuse_rgb_to_nv12_2x2(__global const uchar* visible_rgb,
                                    __global uchar* out_nv12,
                                    int visible_w,
                                    int visible_h,
+                                   int composite_w,
+                                   int composite_h,
                                    int out_w,
                                    int out_h,
                                    float visible_weight,
-                                   int visible_offset_x,
-                                   int visible_offset_y,
+                                   int composite_offset_x,
+                                   int composite_offset_y,
                                    int crop_left,
                                    int crop_right,
                                    int crop_top,
@@ -268,14 +268,15 @@ __kernel void fuse_rgb_to_nv12_2x2(__global const uchar* visible_rgb,
             int r = 0;
             int g = 0;
             int b = 0;
-            fused_rgb_at_gpu(visible_rgb, composite_rgb,
-                             visible_w, visible_h,
-                             out_w, out_h,
-                             visible_weight,
-                             visible_offset_x, visible_offset_y,
-                             crop_left, crop_right, crop_top, crop_bottom,
-                             x, y,
-                             &r, &g, &b);
+            fused_rgb_visible_reference_at_gpu(visible_rgb, composite_rgb,
+                                               visible_w, visible_h,
+                                               composite_w, composite_h,
+                                               out_w, out_h,
+                                               visible_weight,
+                                               composite_offset_x, composite_offset_y,
+                                               crop_left, crop_right, crop_top, crop_bottom,
+                                               x, y,
+                                               &r, &g, &b);
 
             const int yy = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
             const int uu = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
@@ -295,6 +296,7 @@ __kernel void fuse_rgb_to_nv12_2x2(__global const uchar* visible_rgb,
         uv_plane[uv_index + 1] = clamp_u8_gpu(v_sum / count);
     }
 }
+
 )CLC";
 }
 
@@ -497,7 +499,7 @@ public:
             setError(errorOut, "OpenCL fusion rejects odd output size because NV12 requires even width/height");
             return false;
         }
-        if (visible.width <= 0 || visible.height <= 0 || composite.width != outputWidth_ || composite.height != outputHeight_) {
+        if (visible.width <= 0 || visible.height <= 0 || composite.width <= 0 || composite.height <= 0) {
             setError(errorOut, "invalid visible/composite frame dimensions for OpenCL fusion");
             return false;
         }
@@ -536,15 +538,17 @@ public:
 
         const int visibleW = visible.width;
         const int visibleH = visible.height;
+        const int compositeW = composite.width;
+        const int compositeH = composite.height;
         const int outW = outputWidth_;
         const int outH = outputHeight_;
         float visibleWeight = static_cast<float>(std::max(0.0, std::min(1.0, params.visibleWeight)));
-        const int offsetX = params.visibleOffsetX;
-        const int offsetY = params.visibleOffsetY;
-        const int cropLeft = std::max(0, params.visibleCropLeft);
-        const int cropRight = std::max(0, params.visibleCropRight);
-        const int cropTop = std::max(0, params.visibleCropTop);
-        const int cropBottom = std::max(0, params.visibleCropBottom);
+        const int offsetX = params.compositeOffsetX;
+        const int offsetY = params.compositeOffsetY;
+        const int cropLeft = std::max(0, params.compositeCropLeft);
+        const int cropRight = std::max(0, params.compositeCropRight);
+        const int cropTop = std::max(0, params.compositeCropTop);
+        const int cropBottom = std::max(0, params.compositeCropBottom);
         const int bilinear = params.enableBilinearResize ? 1 : 0;
 
         int arg = 0;
@@ -553,6 +557,8 @@ public:
         err |= clSetKernelArg(kernel_, arg++, sizeof(cl_mem), &outputBuffer_);
         err |= clSetKernelArg(kernel_, arg++, sizeof(int), &visibleW);
         err |= clSetKernelArg(kernel_, arg++, sizeof(int), &visibleH);
+        err |= clSetKernelArg(kernel_, arg++, sizeof(int), &compositeW);
+        err |= clSetKernelArg(kernel_, arg++, sizeof(int), &compositeH);
         err |= clSetKernelArg(kernel_, arg++, sizeof(int), &outW);
         err |= clSetKernelArg(kernel_, arg++, sizeof(int), &outH);
         err |= clSetKernelArg(kernel_, arg++, sizeof(float), &visibleWeight);

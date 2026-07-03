@@ -16,18 +16,18 @@ using tri::protocol::private_api::PrivateWorkMode;
 using tri::protocol::private_api::toCommandName;
 using tri::protocol::private_api::toString;
 
-struct VisibleShrinkBorder {
+struct ShrinkBorder {
     int left = 0;
     int right = 0;
     int top = 0;
     int bottom = 0;
 };
 
-VisibleShrinkBorder splitVisibleShrinkPixels(int horizontalPixels, int verticalPixels) {
+ShrinkBorder splitShrinkPixels(int horizontalPixels, int verticalPixels) {
     if (horizontalPixels < 0) horizontalPixels = 0;
     if (verticalPixels < 0) verticalPixels = 0;
 
-    VisibleShrinkBorder border;
+    ShrinkBorder border;
     border.left = horizontalPixels / 2;
     border.right = horizontalPixels - border.left;
     border.top = verticalPixels / 2;
@@ -138,100 +138,100 @@ std::string PrivateVideoRuntime::activeDescription() const {
     return activeDescription_;
 }
 
-bool PrivateVideoRuntime::setAppFusionVisiblePositionOffset(int offsetX, int offsetY) {
-    appFusionVisibleOffsetX_ = offsetX;
-    appFusionVisibleOffsetY_ = offsetY;
+bool PrivateVideoRuntime::setAppFusionCompositePositionOffset(int offsetX, int offsetY) {
+    appFusionCompositeOffsetX_ = offsetX;
+    appFusionCompositeOffsetY_ = offsetY;
     if (usingAppFusion_ && appFusionPipeline_.isRunning()) {
-        return appFusionPipeline_.setVisiblePositionOffset(offsetX, offsetY);
+        return appFusionPipeline_.setCompositePositionOffset(offsetX, offsetY);
     }
     return true;
 }
 
-bool PrivateVideoRuntime::moveAppFusionVisiblePositionOffset(int deltaX, int deltaY) {
-    return setAppFusionVisiblePositionOffset(appFusionVisibleOffsetX_ + deltaX,
-                                             appFusionVisibleOffsetY_ + deltaY);
+bool PrivateVideoRuntime::moveAppFusionCompositePositionOffset(int deltaX, int deltaY) {
+    return setAppFusionCompositePositionOffset(appFusionCompositeOffsetX_ + deltaX,
+                                             appFusionCompositeOffsetY_ + deltaY);
 }
 
-std::pair<int, int> PrivateVideoRuntime::appFusionVisiblePositionOffset() const {
-    return {appFusionVisibleOffsetX_, appFusionVisibleOffsetY_};
+std::pair<int, int> PrivateVideoRuntime::appFusionCompositePositionOffset() const {
+    return {appFusionCompositeOffsetX_, appFusionCompositeOffsetY_};
 }
 
-bool PrivateVideoRuntime::setAppFusionVisibleShrinkPixels(int horizontalPixels, int verticalPixels) {
+bool PrivateVideoRuntime::setAppFusionCompositeShrinkPixels(int horizontalPixels, int verticalPixels) {
     if (horizontalPixels < 0 || verticalPixels < 0) {
-        lastError_ = "visible shrink pixels must be non-negative";
+        lastError_ = "composite shrink pixels must be non-negative";
         return false;
     }
 
-    appFusionVisibleShrinkHorizontal_ = horizontalPixels;
-    appFusionVisibleShrinkVertical_ = verticalPixels;
+    appFusionCompositeShrinkHorizontal_ = horizontalPixels;
+    appFusionCompositeShrinkVertical_ = verticalPixels;
 
     if (usingAppFusion_ && appFusionPipeline_.isRunning()) {
-        return appFusionPipeline_.setVisibleShrinkPixels(horizontalPixels, verticalPixels);
+        return appFusionPipeline_.setCompositeShrinkPixels(horizontalPixels, verticalPixels);
     }
     return true;
 }
 
-std::pair<int, int> PrivateVideoRuntime::appFusionVisibleShrinkPixels() const {
-    return {appFusionVisibleShrinkHorizontal_, appFusionVisibleShrinkVertical_};
+std::pair<int, int> PrivateVideoRuntime::appFusionCompositeShrinkPixels() const {
+    return {appFusionCompositeShrinkHorizontal_, appFusionCompositeShrinkVertical_};
 }
 
-bool PrivateVideoRuntime::saveAppFusionVisibleAdjustment(const std::string& path) {
+bool PrivateVideoRuntime::saveAppFusionCompositeAdjustment(const std::string& path) {
     if (path.empty()) {
-        lastError_ = "visible adjustment save path is empty";
+        lastError_ = "composite adjustment save path is empty";
         return false;
     }
 
     const std::string tmpPath = path + ".tmp";
     std::ofstream out(tmpPath, std::ios::out | std::ios::trunc);
     if (!out.is_open()) {
-        lastError_ = "failed to open visible adjustment temp file for write: " + tmpPath;
+        lastError_ = "failed to open composite adjustment temp file for write: " + tmpPath;
         return false;
     }
 
-    out << "# Tri-fusion visible fusion adjustment\n";
-    out << "# Saved by /api/v1/fusion/visible_adjustment/save\n";
-    out << "visible_offset_x=" << appFusionVisibleOffsetX_ << "\n";
-    out << "visible_offset_y=" << appFusionVisibleOffsetY_ << "\n";
-    out << "visible_shrink_horizontal=" << appFusionVisibleShrinkHorizontal_ << "\n";
-    out << "visible_shrink_vertical=" << appFusionVisibleShrinkVertical_ << "\n";
+    out << "# Tri-fusion composite fusion adjustment\n";
+    out << "# Saved by /api/v1/fusion/composite_adjustment/save\n";
+    out << "composite_offset_x=" << appFusionCompositeOffsetX_ << "\n";
+    out << "composite_offset_y=" << appFusionCompositeOffsetY_ << "\n";
+    out << "composite_shrink_horizontal=" << appFusionCompositeShrinkHorizontal_ << "\n";
+    out << "composite_shrink_vertical=" << appFusionCompositeShrinkVertical_ << "\n";
     out.close();
 
     if (!out) {
-        lastError_ = "failed to write visible adjustment temp file: " + tmpPath;
+        lastError_ = "failed to write composite adjustment temp file: " + tmpPath;
         std::remove(tmpPath.c_str());
         return false;
     }
 
     if (std::rename(tmpPath.c_str(), path.c_str()) != 0) {
-        lastError_ = "failed to rename visible adjustment temp file to final path: " + path;
+        lastError_ = "failed to rename composite adjustment temp file to final path: " + path;
         std::remove(tmpPath.c_str());
         return false;
     }
 
-    std::cerr << "[VIDEO][RUNTIME] saved visible fusion adjustment path=" << path
-              << " offset=" << appFusionVisibleOffsetX_ << "," << appFusionVisibleOffsetY_
-              << " shrink=" << appFusionVisibleShrinkHorizontal_ << "," << appFusionVisibleShrinkVertical_
+    std::cerr << "[VIDEO][RUNTIME] saved composite fusion adjustment path=" << path
+              << " offset=" << appFusionCompositeOffsetX_ << "," << appFusionCompositeOffsetY_
+              << " shrink=" << appFusionCompositeShrinkHorizontal_ << "," << appFusionCompositeShrinkVertical_
               << "\n";
     return true;
 }
 
-bool PrivateVideoRuntime::loadAppFusionVisibleAdjustment(const std::string& path) {
+bool PrivateVideoRuntime::loadAppFusionCompositeAdjustment(const std::string& path) {
     if (path.empty()) {
-        lastError_ = "visible adjustment load path is empty";
+        lastError_ = "composite adjustment load path is empty";
         return false;
     }
 
     std::ifstream in(path);
     if (!in.is_open()) {
-        std::cerr << "[VIDEO][RUNTIME] visible fusion adjustment config not found, use defaults path="
+        std::cerr << "[VIDEO][RUNTIME] composite fusion adjustment config not found, use defaults path="
                   << path << "\n";
         return true;
     }
 
-    int offsetX = appFusionVisibleOffsetX_;
-    int offsetY = appFusionVisibleOffsetY_;
-    int shrinkHorizontal = appFusionVisibleShrinkHorizontal_;
-    int shrinkVertical = appFusionVisibleShrinkVertical_;
+    int offsetX = appFusionCompositeOffsetX_;
+    int offsetY = appFusionCompositeOffsetY_;
+    int shrinkHorizontal = appFusionCompositeShrinkHorizontal_;
+    int shrinkVertical = appFusionCompositeShrinkVertical_;
 
     std::string line;
     int lineNo = 0;
@@ -242,7 +242,7 @@ bool PrivateVideoRuntime::loadAppFusionVisibleAdjustment(const std::string& path
 
         const std::size_t eq = trimmed.find('=');
         if (eq == std::string::npos) {
-            lastError_ = "invalid visible adjustment line without '=' at " + path + ":" + std::to_string(lineNo);
+            lastError_ = "invalid composite adjustment line without '=' at " + path + ":" + std::to_string(lineNo);
             return false;
         }
 
@@ -254,37 +254,37 @@ bool PrivateVideoRuntime::loadAppFusionVisibleAdjustment(const std::string& path
             return false;
         }
 
-        if (key == "visible_offset_x") {
+        if (key == "composite_offset_x") {
             offsetX = value;
-        } else if (key == "visible_offset_y") {
+        } else if (key == "composite_offset_y") {
             offsetY = value;
-        } else if (key == "visible_shrink_horizontal") {
+        } else if (key == "composite_shrink_horizontal") {
             shrinkHorizontal = value;
-        } else if (key == "visible_shrink_vertical") {
+        } else if (key == "composite_shrink_vertical") {
             shrinkVertical = value;
         } else {
-            std::cerr << "[VIDEO][RUNTIME] ignore unknown visible adjustment key=" << key
+            std::cerr << "[VIDEO][RUNTIME] ignore unknown composite adjustment key=" << key
                       << " path=" << path << " line=" << lineNo << "\n";
         }
     }
 
     if (offsetX < -4096 || offsetX > 4096 || offsetY < -4096 || offsetY > 4096) {
-        lastError_ = "loaded visible offset out of range -4096..4096 from " + path;
+        lastError_ = "loaded composite offset out of range -4096..4096 from " + path;
         return false;
     }
-    if (shrinkHorizontal < 0 || shrinkHorizontal > 798 || shrinkVertical < 0 || shrinkVertical > 598) {
-        lastError_ = "loaded visible shrink out of range, horizontal 0..798 vertical 0..598 from " + path;
+    if (shrinkHorizontal < 0 || shrinkHorizontal > 1598 || shrinkVertical < 0 || shrinkVertical > 1198) {
+        lastError_ = "loaded composite shrink out of range, horizontal 0..1598 vertical 0..1198 from " + path;
         return false;
     }
 
-    appFusionVisibleOffsetX_ = offsetX;
-    appFusionVisibleOffsetY_ = offsetY;
-    appFusionVisibleShrinkHorizontal_ = shrinkHorizontal;
-    appFusionVisibleShrinkVertical_ = shrinkVertical;
+    appFusionCompositeOffsetX_ = offsetX;
+    appFusionCompositeOffsetY_ = offsetY;
+    appFusionCompositeShrinkHorizontal_ = shrinkHorizontal;
+    appFusionCompositeShrinkVertical_ = shrinkVertical;
 
-    std::cerr << "[VIDEO][RUNTIME] loaded visible fusion adjustment path=" << path
-              << " offset=" << appFusionVisibleOffsetX_ << "," << appFusionVisibleOffsetY_
-              << " shrink=" << appFusionVisibleShrinkHorizontal_ << "," << appFusionVisibleShrinkVertical_
+    std::cerr << "[VIDEO][RUNTIME] loaded composite fusion adjustment path=" << path
+              << " offset=" << appFusionCompositeOffsetX_ << "," << appFusionCompositeOffsetY_
+              << " shrink=" << appFusionCompositeShrinkHorizontal_ << "," << appFusionCompositeShrinkVertical_
               << "\n";
     return true;
 }
@@ -338,18 +338,20 @@ tri::media::app_fusion::AppFusionOptions PrivateVideoRuntime::buildAppFusionOpti
     opt.visibleHeight = visibleCfg.height > 0 ? visibleCfg.height : 1200;
     opt.compositeWidth = targetCfg.width > 0 ? targetCfg.width : 800;
     opt.compositeHeight = targetCfg.height > 0 ? targetCfg.height : 600;
+    opt.outputWidth = opt.visibleWidth;
+    opt.outputHeight = opt.visibleHeight;
     opt.fps = targetCfg.fps > 0 ? targetCfg.fps : 30;
 
     opt.compositeAlpha = 0.35;
-    opt.visibleOffsetX = appFusionVisibleOffsetX_;
-    opt.visibleOffsetY = appFusionVisibleOffsetY_;
+    opt.compositeOffsetX = appFusionCompositeOffsetX_;
+    opt.compositeOffsetY = appFusionCompositeOffsetY_;
 
-    const auto border = splitVisibleShrinkPixels(appFusionVisibleShrinkHorizontal_,
-                                                 appFusionVisibleShrinkVertical_);
-    opt.visibleCropLeft = border.left;
-    opt.visibleCropRight = border.right;
-    opt.visibleCropTop = border.top;
-    opt.visibleCropBottom = border.bottom;
+    const auto border = splitShrinkPixels(appFusionCompositeShrinkHorizontal_,
+                                          appFusionCompositeShrinkVertical_);
+    opt.compositeCropLeft = border.left;
+    opt.compositeCropRight = border.right;
+    opt.compositeCropTop = border.top;
+    opt.compositeCropBottom = border.bottom;
 
     opt.convertElement = "videoconvert";
     opt.verbose = false;
@@ -362,15 +364,16 @@ bool PrivateVideoRuntime::startAppFusionMode(PrivateWorkMode mode) {
               << " command=" << toCommandName(mode)
               << " visible=" << opt.visibleDevice << " " << opt.visibleWidth << "x" << opt.visibleHeight
               << " composite=" << opt.compositeDevice << " " << opt.compositeWidth << "x" << opt.compositeHeight
+              << " output=" << opt.outputWidth << "x" << opt.outputHeight
               << " fps=" << opt.fps
               << " udp=" << opt.udpHost << ":" << opt.udpPort
-              << " visible_shrink_black_border=L" << opt.visibleCropLeft
-              << " R" << opt.visibleCropRight
-              << " T" << opt.visibleCropTop
-              << " B" << opt.visibleCropBottom
-              << " horizontal=" << appFusionVisibleShrinkHorizontal_
-              << " vertical=" << appFusionVisibleShrinkVertical_
-              << " visible_position_offset=" << opt.visibleOffsetX << "," << opt.visibleOffsetY
+              << " composite_adjustment=L" << opt.compositeCropLeft
+              << " R" << opt.compositeCropRight
+              << " T" << opt.compositeCropTop
+              << " B" << opt.compositeCropBottom
+              << " shrink_horizontal=" << appFusionCompositeShrinkHorizontal_
+              << " shrink_vertical=" << appFusionCompositeShrinkVertical_
+              << " composite_position_offset=" << opt.compositeOffsetX << "," << opt.compositeOffsetY
               << "\n";
 
     if (!appFusionPipeline_.start(opt)) {

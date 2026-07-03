@@ -19,13 +19,14 @@ struct GpuFusionParams {
 
     double visibleWeight = 0.5;
 
-    int visibleOffsetX = 0;
-    int visibleOffsetY = 0;
+    // Composite placement in visible/output coordinates.
+    int compositeOffsetX = 0;
+    int compositeOffsetY = 0;
 
-    int visibleCropLeft = 0;
-    int visibleCropRight = 0;
-    int visibleCropTop = 0;
-    int visibleCropBottom = 0;
+    int compositeCropLeft = 0;
+    int compositeCropRight = 0;
+    int compositeCropTop = 0;
+    int compositeCropBottom = 0;
 
     bool enableBilinearResize = false;
 };

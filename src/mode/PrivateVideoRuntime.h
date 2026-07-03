@@ -28,15 +28,15 @@ public:
     std::string lastError() const;
     std::string activeDescription() const;
 
-    bool setAppFusionVisiblePositionOffset(int offsetX, int offsetY);
-    bool moveAppFusionVisiblePositionOffset(int deltaX, int deltaY);
-    std::pair<int, int> appFusionVisiblePositionOffset() const;
+    bool setAppFusionCompositePositionOffset(int offsetX, int offsetY);
+    bool moveAppFusionCompositePositionOffset(int deltaX, int deltaY);
+    std::pair<int, int> appFusionCompositePositionOffset() const;
 
-    bool setAppFusionVisibleShrinkPixels(int horizontalPixels, int verticalPixels);
-    std::pair<int, int> appFusionVisibleShrinkPixels() const;
+    bool setAppFusionCompositeShrinkPixels(int horizontalPixels, int verticalPixels);
+    std::pair<int, int> appFusionCompositeShrinkPixels() const;
 
-    bool saveAppFusionVisibleAdjustment(const std::string& path);
-    bool loadAppFusionVisibleAdjustment(const std::string& path);
+    bool saveAppFusionCompositeAdjustment(const std::string& path);
+    bool loadAppFusionCompositeAdjustment(const std::string& path);
 
 private:
     bool startGstLaunchMode(tri::protocol::private_api::PrivateWorkMode mode);
@@ -51,10 +51,10 @@ private:
     tri::protocol::private_api::PrivateWorkMode currentMode_;
     bool hasMode_{false};
     bool usingAppFusion_{false};
-    int appFusionVisibleOffsetX_{0};
-    int appFusionVisibleOffsetY_{0};
-    int appFusionVisibleShrinkHorizontal_{8};
-    int appFusionVisibleShrinkVertical_{6};
+    int appFusionCompositeOffsetX_{0};
+    int appFusionCompositeOffsetY_{0};
+    int appFusionCompositeShrinkHorizontal_{0};
+    int appFusionCompositeShrinkVertical_{0};
     std::string lastError_;
     std::string activeDescription_;
 };
