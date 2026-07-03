@@ -105,12 +105,13 @@ VisibleBorderPixels splitVisibleShrinkPixels(int horizontalPixels, int verticalP
 
 std::string buildVisiblePipelineDesc(const AppFusionOptions& opt) {
     std::ostringstream ss;
-    ss << "v4l2src device=" << opt.visibleDevice << " io-mode=mmap "
-       << "! image/jpeg,width=" << opt.visibleWidth
+    ss << "v4l2src device=" << opt.visibleDevice
+       << " io-mode=mmap do-timestamp=true "
+       << "! video/x-raw,format=YUY2,width=" << opt.visibleWidth
        << ",height=" << opt.visibleHeight
        << ",framerate=" << opt.fps << "/1 "
-       << "! mppjpegdec "
-       << "! " << opt.convertElement << " "
+       << "! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream "
+       << "! videoconvert "
        << "! video/x-raw,format=RGB,width=" << opt.visibleWidth
        << ",height=" << opt.visibleHeight
        << ",framerate=" << opt.fps << "/1 "

@@ -1,0 +1,15 @@
+media:
+  main_stream:
+    codec: "h264"
+    encoder: "mpp"
+    width: 1920
+    height: 1080
+    fps: 25
+    bitrate: 4096
+    gop: 25
+    low_latency: true
+    drop_frame: true
+  rtsp:
+    enable: true
+    port: 8554
+    path: "/live/main"

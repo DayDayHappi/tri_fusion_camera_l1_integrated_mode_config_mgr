@@ -1,91 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 project(tri_fusion_camera_l1_integrated LANGUAGES CXX)
 
-
-
-# ============================================================
-# TRI_FUSION_BOARD_SYSROOT_SELECT_BLOCK
-# Board-specific sysroot selection.
-# The real sysroot must be passed by each board build script.
-# Example:
-#   Lindi      : -DTRI_TARGET_BOARD=lindi
-#   Chuanglong : -DTRI_TARGET_BOARD=chuanglong
-# ============================================================
-set(TRI_TARGET_BOARD "unknown" CACHE STRING "Target board name")
-
-if(DEFINED TRI_FUSION_TARGET_SYSROOT AND NOT "${TRI_FUSION_TARGET_SYSROOT}" STREQUAL "")
-    set(TRI_FUSION_BUILDROOT_SYSROOT
-        "${TRI_FUSION_TARGET_SYSROOT}"
-        CACHE PATH "Target board Buildroot sysroot"
-        FORCE
-    )
-elseif(DEFINED CMAKE_SYSROOT AND NOT "${CMAKE_SYSROOT}" STREQUAL "")
-    set(TRI_FUSION_BUILDROOT_SYSROOT
-        "${CMAKE_SYSROOT}"
-        CACHE PATH "Target board Buildroot sysroot"
-        FORCE
-    )
-else()
-    message(FATAL_ERROR
-        "TRI_FUSION_BUILDROOT_SYSROOT is not set. "
-        "Please pass -DTRI_FUSION_TARGET_SYSROOT=/path/to/board/sysroot "
-        "from the board-specific build script."
-    )
-endif()
-
-message(STATUS "TRI_TARGET_BOARD=${TRI_TARGET_BOARD}")
-message(STATUS "TRI_FUSION_BUILDROOT_SYSROOT=${TRI_FUSION_BUILDROOT_SYSROOT}")
-
-
-# ============================================================
-# TRI_FUSION_OPENCL_MALI_LINK_BLOCK
-# OpenCL on RK3588J is provided by libOpenCL.so and/or libmali.so.
-# These libraries must come from the active board sysroot.
-# ============================================================
-find_path(TRI_FUSION_OPENCL_INCLUDE_DIR
-    NAMES CL/cl.h
-    PATHS
-        "${TRI_FUSION_BUILDROOT_SYSROOT}/usr/include"
-        "${CMAKE_SYSROOT}/usr/include"
-    NO_DEFAULT_PATH
-)
-
-find_library(TRI_FUSION_OPENCL_LIBRARY
-    NAMES OpenCL
-    PATHS
-        "${TRI_FUSION_BUILDROOT_SYSROOT}/usr/lib"
-        "${TRI_FUSION_BUILDROOT_SYSROOT}/usr/lib64"
-        "${CMAKE_SYSROOT}/usr/lib"
-        "${CMAKE_SYSROOT}/usr/lib64"
-    NO_DEFAULT_PATH
-)
-
-find_library(TRI_FUSION_MALI_LIBRARY
-    NAMES mali
-    PATHS
-        "${TRI_FUSION_BUILDROOT_SYSROOT}/usr/lib"
-        "${TRI_FUSION_BUILDROOT_SYSROOT}/usr/lib64"
-        "${CMAKE_SYSROOT}/usr/lib"
-        "${CMAKE_SYSROOT}/usr/lib64"
-    NO_DEFAULT_PATH
-)
-
-set(TRI_FUSION_OPENCL_LIBS "")
-
-if(TRI_FUSION_OPENCL_LIBRARY)
-    list(APPEND TRI_FUSION_OPENCL_LIBS "${TRI_FUSION_OPENCL_LIBRARY}")
-endif()
-
-if(TRI_FUSION_MALI_LIBRARY)
-    list(APPEND TRI_FUSION_OPENCL_LIBS "${TRI_FUSION_MALI_LIBRARY}")
-endif()
-
-message(STATUS "TRI_FUSION_OPENCL_INCLUDE_DIR=${TRI_FUSION_OPENCL_INCLUDE_DIR}")
-message(STATUS "TRI_FUSION_OPENCL_LIBRARY=${TRI_FUSION_OPENCL_LIBRARY}")
-message(STATUS "TRI_FUSION_MALI_LIBRARY=${TRI_FUSION_MALI_LIBRARY}")
-message(STATUS "TRI_FUSION_OPENCL_LIBS=${TRI_FUSION_OPENCL_LIBS}")
-
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -112,8 +27,13 @@ if(PkgConfig_FOUND)
     )
 endif()
 
-# Buildroot cross sysroot is selected by the active board build script.
-# Do not hardcode Chuanglong/Lindi SDK path here.
+# Buildroot cross sysroot.
+# If CMAKE_SYSROOT is not exported by the toolchain file, keep a direct fallback
+# to the RK3588 Buildroot sysroot where gst/gst.h was confirmed to exist.
+set(TRI_FUSION_BUILDROOT_SYSROOT
+    "/home/alientek/tronlong/RK3588/rk3588_linux_release/buildroot/output/rockchip_rk3588/host/aarch64-buildroot-linux-gnu/sysroot"
+    CACHE PATH "RK3588 Buildroot target sysroot"
+)
 
 set(TRI_FUSION_GSTREAMER_INCLUDE_DIRS
     ${GSTREAMER_INCLUDE_DIRS}
@@ -819,20 +739,4 @@ set_target_properties(
             pthread
     )
 
-endif()
-# ============================================================
-# Lindi/Chuanglong RK3588J OpenCL final link fix
-# OpenClFusionBackend.cpp uses clCreateProgramWithSource and other OpenCL APIs.
-# Since tri_fusion_media is a static library, the final executable must also
-# link OpenCL/Mali explicitly.
-# ============================================================
-if(TRI_FUSION_OPENCL_LIBS)
-    if(TARGET tri_fusion_media)
-        target_include_directories(tri_fusion_media PUBLIC ${TRI_FUSION_OPENCL_INCLUDE_DIR})
-        target_link_libraries(tri_fusion_media PUBLIC ${TRI_FUSION_OPENCL_LIBS})
-    endif()
-
-    if(TARGET l8_private_gstreamer_control_probe)
-        target_link_libraries(l8_private_gstreamer_control_probe PRIVATE ${TRI_FUSION_OPENCL_LIBS})
-    endif()
 endif()

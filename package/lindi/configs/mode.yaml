@@ -1,0 +1,23 @@
+mode:
+  default: "LOWLIGHT_THERMAL_COMPOSITE"
+  modes:
+    visible_only:
+      enable: true
+    lowlight_only:
+      enable: true
+      composite_output: "LOWLIGHT_ONLY"
+    thermal_only:
+      enable: true
+      composite_output: "THERMAL_ONLY"
+    lowlight_thermal_composite:
+      enable: true
+      composite_output: "LOWLIGHT_THERMAL_COMPOSITE"
+    visible_lowlight_fusion:
+      enable: true
+      composite_output: "LOWLIGHT_ONLY"
+    visible_thermal_fusion:
+      enable: true
+      composite_output: "THERMAL_ONLY"
+    visible_composite_fusion:
+      enable: true
+      composite_output: "LOWLIGHT_THERMAL_COMPOSITE"

@@ -1,0 +1,34 @@
+camera:
+  visible:
+    enable: true
+    name: "visible_camera"
+    video_node: "/dev/tri_visible_video"
+    width: 640
+    height: 480
+    fps: 30
+    format: "mjpeg"
+
+  composite_low_thermal:
+    enable: true
+    name: "composite_low_thermal_camera"
+    video_node: "/dev/tri_composite_video"
+    metadata_node: "/dev/tri_composite_meta"
+    width: 800
+    height: 600
+    fps: 30
+    format: "yuy2"
+    metadata_format: "uvch"
+
+  # 上位机模式命令到实际视频采集源的映射。
+  # 当前 GStreamer 调试版本每次只输出一路视频：
+  #   visible  -> 可见光相机 /dev/video3，使用 MJPG pipeline
+  #   其他复合相关模式 -> 复合相机图像节点 /dev/video1，使用 YUY2 pipeline
+  # 后续真正接入双路融合时，可以在 ModeManager/FusionPipeline 中扩展 visible_lowlight 等模式。
+  mode_source:
+    visible: "visible"
+    lowlight: "composite"
+    thermal: "composite"
+    lowlight_thermal: "composite"
+    visible_lowlight: "composite"
+    visible_thermal: "composite"
+    visible_composite: "composite"
